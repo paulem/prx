@@ -1,6 +1,6 @@
 import { constants } from "node:os";
 import { proxyUrl, type ProxyConfig } from "./config.ts";
-import type { SpawnOutcome } from "./system.ts";
+import type { LaunchRequest, SpawnOutcome } from "./system.ts";
 
 /** Hosts an env-injected app reaches directly, so local servers keep working */
 export const BYPASS_HOSTS = "localhost,127.0.0.1,::1";
@@ -21,6 +21,11 @@ export function envInjection(proxy: ProxyConfig): Record<string, string> {
 
 export function argsInjection(proxy: ProxyConfig): string[] {
   return [`--proxy-server=${proxyUrl(proxy)}`];
+}
+
+/** Starts a new instance of a macOS app bundle with arguments, without waiting for it */
+export function macOpenLaunch(appPath: string, args: string[]): LaunchRequest {
+  return { command: "open", args: ["-n", "-a", appPath, "--args", ...args] };
 }
 
 /** Mirrors what a shell reports for a child: its exit code, or 128 plus the signal number */

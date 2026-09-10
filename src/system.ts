@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { access, constants, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
@@ -8,6 +8,11 @@ export interface SpawnRequest {
   args: string[];
   /** Variables added on top of prx's own environment */
   env: Record<string, string>;
+}
+
+export interface LaunchRequest {
+  command: string;
+  args: string[];
 }
 
 export interface SpawnOutcome {
@@ -34,6 +39,10 @@ export interface SystemAdapter {
   findApplication: (name: string) => Promise<string | undefined>;
   /** Runs the app in the foreground sharing this terminal, resolving when it exits */
   spawnAttached: (request: SpawnRequest) => Promise<SpawnOutcome>;
+  /** Starts the launcher command and resolves once it has handed the app off, capturing no output */
+  launchDetached: (request: LaunchRequest) => Promise<void>;
+  /** Whether an app from an Applications folder has a running instance */
+  isApplicationRunning: (name: string) => Promise<boolean>;
 }
 
 export function createNodeSystemAdapter(env: NodeJS.ProcessEnv = process.env): SystemAdapter {
@@ -80,6 +89,33 @@ export function createNodeSystemAdapter(env: NodeJS.ProcessEnv = process.env): S
         });
         child.on("error", reject);
         child.on("exit", (exitCode, signal) => resolve({ exitCode, signal }));
+      });
+    },
+    launchDetached(request) {
+      return new Promise((resolve, reject) => {
+        const child = spawn(request.command, request.args, { stdio: "ignore" });
+        child.on("error", reject);
+        child.on("exit", (exitCode) => {
+          if (exitCode === 0) {
+            resolve();
+          } else {
+            reject(new Error(`${request.command} exited with code ${exitCode}`));
+          }
+        });
+      });
+    },
+    isApplicationRunning(name) {
+      // pgrep exits 0 when a process with exactly that name exists and 1 when none does
+      return new Promise((resolve, reject) => {
+        execFile("pgrep", ["-x", name], (error) => {
+          if (error === null) {
+            resolve(true);
+          } else if (error.code === 1) {
+            resolve(false);
+          } else {
+            reject(error);
+          }
+        });
       });
     },
   };

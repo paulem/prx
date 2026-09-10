@@ -1,4 +1,4 @@
-import type { SpawnOutcome, SpawnRequest, SystemAdapter } from "../src/system.ts";
+import type { LaunchRequest, SpawnOutcome, SpawnRequest, SystemAdapter } from "../src/system.ts";
 
 export interface FakeSystem {
   system: SystemAdapter;
@@ -14,6 +14,10 @@ export interface FakeSystem {
   spawns: SpawnRequest[];
   /** What the next attached launch reports when it ends */
   spawnOutcome: SpawnOutcome;
+  /** Every detached launch the CLI asked for, in order */
+  launches: LaunchRequest[];
+  /** Apps the fake reports as having a running instance */
+  running: Set<string>;
 }
 
 export const FAKE_HOME = "/home/test";
@@ -26,6 +30,8 @@ export function createFakeSystem(): FakeSystem {
   const onPath = new Map<string, string>();
   const applications = new Map<string, string>();
   const spawns: SpawnRequest[] = [];
+  const launches: LaunchRequest[] = [];
+  const running = new Set<string>();
   const fake: FakeSystem = {
     system: {
       writeStdout(text) {
@@ -45,6 +51,10 @@ export function createFakeSystem(): FakeSystem {
         spawns.push(request);
         return fake.spawnOutcome;
       },
+      launchDetached: async (request) => {
+        launches.push(request);
+      },
+      isApplicationRunning: async (name) => running.has(name),
     },
     stdout: () => out.join(""),
     stderr: () => err.join(""),
@@ -53,6 +63,8 @@ export function createFakeSystem(): FakeSystem {
     applications,
     spawns,
     spawnOutcome: { exitCode: 0, signal: null },
+    launches,
+    running,
   };
   return fake;
 }

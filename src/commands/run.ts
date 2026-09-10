@@ -1,6 +1,6 @@
 import { proxyUrl, readConfig, type ProxyConfig } from "../config.ts";
 import { PrxError } from "../errors.ts";
-import { envInjection, exitCodeFromOutcome } from "../launch.ts";
+import { argsInjection, envInjection, exitCodeFromOutcome, macOpenLaunch } from "../launch.ts";
 import type { Reporter } from "../output.ts";
 import { findPreset, locateApp, type Preset } from "../presets/index.ts";
 import { DEFAULT_PROBE_URL, probe } from "../probe.ts";
@@ -38,6 +38,15 @@ export async function runRun(command: RunCommand): Promise<number> {
     );
   }
 
+  if (preset.refuseWhenRunning !== undefined && preset.app.kind === "application") {
+    if (await system.isApplicationRunning(preset.app.name)) {
+      throw new PrxError(
+        "app_already_running",
+        `${preset.app.name} is already running. ${preset.refuseWhenRunning}`,
+      );
+    }
+  }
+
   const latencyMs = await probeBeforeLaunch(command, preset, proxy);
 
   if (json) {
@@ -48,12 +57,30 @@ export async function runRun(command: RunCommand): Promise<number> {
     system.writeStderr(`prx: proxy ${proxyUrl(proxy)} ${probeSummary}, launching ${preset.name}\n`);
   }
 
+  const injected = inject(preset, proxy);
+  if (preset.launch === "detached") {
+    await system.launchDetached(macOpenLaunch(appPath, [...injected.args, ...passthrough]));
+    return 0;
+  }
+
   const outcome = await system.spawnAttached({
     command: appPath,
-    args: passthrough,
-    env: envInjection(proxy),
+    args: [...injected.args, ...passthrough],
+    env: injected.env,
   });
   return exitCodeFromOutcome(outcome);
+}
+
+interface Injected {
+  env: Record<string, string>;
+  args: string[];
+}
+
+function inject(preset: Preset, proxy: ProxyConfig): Injected {
+  if (preset.injection === "env") {
+    return { env: envInjection(proxy), args: [] };
+  }
+  return { env: {}, args: argsInjection(proxy) };
 }
 
 async function probeBeforeLaunch(
