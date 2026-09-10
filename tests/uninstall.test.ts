@@ -56,6 +56,24 @@ describe("prx uninstall", () => {
     expect(fake.files.get(ZSHRC)).toBe(`${ZSHRC_BEFORE}${ZSHRC_AFTER}`);
   });
 
+  test("removes the block cleanly when no blank line precedes it", async () => {
+    const fake = installedFake();
+    fake.files.set(ZSHRC, `${ZSHRC_BEFORE}${PATH_BLOCK}${ZSHRC_AFTER}`);
+
+    await runCli(["uninstall", "--yes"], fake.system);
+
+    expect(fake.files.get(ZSHRC)).toBe(`${ZSHRC_BEFORE}${ZSHRC_AFTER}`);
+  });
+
+  test("a .zshrc that is only the block becomes empty", async () => {
+    const fake = installedFake();
+    fake.files.set(ZSHRC, PATH_BLOCK);
+
+    await runCli(["uninstall", "--yes"], fake.system);
+
+    expect(fake.files.get(ZSHRC)).toBe("");
+  });
+
   test("--yes skips the confirmation", async () => {
     const fake = installedFake();
 

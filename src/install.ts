@@ -1,6 +1,7 @@
 import { join } from "node:path";
 
-/** Where install.sh puts the bundle and marks its PATH export; uninstall removes exactly these */
+// install.sh writes the bundle and the PATH block; uninstall removes exactly what it wrote
+
 export function installedBinaryPath(homeDir: string): string {
   return join(homeDir, ".local", "bin", "prx");
 }
@@ -11,8 +12,10 @@ export function zshrcPath(homeDir: string): string {
 
 const PATH_BLOCK_START = "# >>> prx >>>";
 const PATH_BLOCK_END = "# <<< prx <<<";
-// The installer writes a blank line before the block; that line goes with it
-const PATH_BLOCK_PATTERN = new RegExp(`\\n?${PATH_BLOCK_START}\\n[\\s\\S]*?${PATH_BLOCK_END}\\n?`);
+// The block starts on its own line, after a blank line the installer wrote when the file had content
+const PATH_BLOCK_PATTERN = new RegExp(
+  `(?<=^|\\n)\\n?${PATH_BLOCK_START}\\n[\\s\\S]*?${PATH_BLOCK_END}\\n?`,
+);
 
 export function hasPathBlock(zshrc: string): boolean {
   return PATH_BLOCK_PATTERN.test(zshrc);
