@@ -1,6 +1,19 @@
+import { spawn } from "node:child_process";
 import { access, constants, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
+
+export interface SpawnRequest {
+  command: string;
+  args: string[];
+  /** Variables added on top of prx's own environment */
+  env: Record<string, string>;
+}
+
+export interface SpawnOutcome {
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+}
 
 /**
  * The single seam between prx and the operating system. Every OS touchpoint
@@ -19,6 +32,8 @@ export interface SystemAdapter {
   findOnPath: (command: string) => Promise<string | undefined>;
   /** Resolves to the bundle path when the app is in /Applications or ~/Applications */
   findApplication: (name: string) => Promise<string | undefined>;
+  /** Runs the app in the foreground sharing this terminal, resolving when it exits */
+  spawnAttached: (request: SpawnRequest) => Promise<SpawnOutcome>;
 }
 
 export function createNodeSystemAdapter(env: NodeJS.ProcessEnv = process.env): SystemAdapter {
@@ -56,6 +71,16 @@ export function createNodeSystemAdapter(env: NodeJS.ProcessEnv = process.env): S
       const bundle = `${name}.app`;
       const candidates = [join("/Applications", bundle), join(homedir(), "Applications", bundle)];
       return firstExisting(candidates, pathExists);
+    },
+    spawnAttached(request) {
+      return new Promise((resolve, reject) => {
+        const child = spawn(request.command, request.args, {
+          stdio: "inherit",
+          env: { ...env, ...request.env },
+        });
+        child.on("error", reject);
+        child.on("exit", (exitCode, signal) => resolve({ exitCode, signal }));
+      });
     },
   };
 }

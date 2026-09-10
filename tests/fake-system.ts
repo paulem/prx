@@ -1,4 +1,4 @@
-import type { SystemAdapter } from "../src/system.ts";
+import type { SpawnOutcome, SpawnRequest, SystemAdapter } from "../src/system.ts";
 
 export interface FakeSystem {
   system: SystemAdapter;
@@ -10,6 +10,10 @@ export interface FakeSystem {
   onPath: Map<string, string>;
   /** Apps the fake reports as installed in an Applications folder, mapped to their bundle path */
   applications: Map<string, string>;
+  /** Every attached launch the CLI asked for, in order */
+  spawns: SpawnRequest[];
+  /** What the next attached launch reports when it ends */
+  spawnOutcome: SpawnOutcome;
 }
 
 export const FAKE_HOME = "/home/test";
@@ -21,7 +25,8 @@ export function createFakeSystem(): FakeSystem {
   const files = new Map<string, string>();
   const onPath = new Map<string, string>();
   const applications = new Map<string, string>();
-  return {
+  const spawns: SpawnRequest[] = [];
+  const fake: FakeSystem = {
     system: {
       writeStdout(text) {
         out.push(text);
@@ -36,13 +41,20 @@ export function createFakeSystem(): FakeSystem {
       },
       findOnPath: async (command) => onPath.get(command),
       findApplication: async (name) => applications.get(name),
+      spawnAttached: async (request) => {
+        spawns.push(request);
+        return fake.spawnOutcome;
+      },
     },
     stdout: () => out.join(""),
     stderr: () => err.join(""),
     files,
     onPath,
     applications,
+    spawns,
+    spawnOutcome: { exitCode: 0, signal: null },
   };
+  return fake;
 }
 
 export function writeFakeConfig(fake: FakeSystem, proxy: { host: string; port: number }): void {

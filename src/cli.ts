@@ -3,6 +3,7 @@ import pkg from "../package.json" with { type: "json" };
 import { runCheck } from "./commands/check.ts";
 import { runConfig } from "./commands/config.ts";
 import { runList } from "./commands/list.ts";
+import { runRun } from "./commands/run.ts";
 import { PrxError } from "./errors.ts";
 import { createReporter, type Reporter } from "./output.ts";
 import { DEFAULT_PROBE_TIMEOUT_MS } from "./probe.ts";
@@ -21,13 +22,16 @@ interface PlannedCommand {
 }
 
 const plannedCommands: PlannedCommand[] = [
-  { usage: "run <preset> [passthrough...]", description: "Launch an app through the proxy" },
   { usage: "init", description: "Set up the proxy interactively" },
   { usage: "uninstall", description: "Remove prx from this machine" },
 ];
 
 interface JsonOption {
   json?: boolean;
+}
+
+interface RunOptions extends JsonOption {
+  check: boolean;
 }
 
 export async function runCli(
@@ -59,7 +63,32 @@ export async function runCli(
       writeOut: system.writeStdout,
       writeErr: system.writeStderr,
     })
-    .showHelpAfterError("(add --help for the list of commands)");
+    .showHelpAfterError("(add --help for the list of commands)")
+    .enablePositionalOptions();
+
+  program
+    .command("run")
+    .description("Launch an app through the proxy")
+    .argument("<preset>", "The app to launch: claude or chrome")
+    .argument("[passthrough...]", "Arguments handed to the app verbatim")
+    .option("--no-check", "Skip the probe and launch anyway")
+    .option("--json", "Print the launch as one JSON object")
+    .passThroughOptions()
+    .action(async (presetName: string, passthrough: string[], commandOptions: RunOptions) => {
+      const json = commandOptions.json === true;
+      const reporter = createReporter(system, json);
+      await report(reporter, () =>
+        runRun({
+          system,
+          reporter,
+          probeTimeoutMs,
+          presetName,
+          passthrough,
+          check: commandOptions.check,
+          json,
+        }),
+      );
+    });
 
   for (const planned of plannedCommands) {
     program
