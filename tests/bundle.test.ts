@@ -16,7 +16,10 @@ interface ProcessResult {
 function runNode(args: string[]): Promise<ProcessResult> {
   return new Promise((resolve) => {
     execFile(process.execPath, args, (error, stdout, stderr) => {
-      const exitCode = error ? (typeof error.code === "number" ? error.code : null) : 0;
+      let exitCode: number | null = 0;
+      if (error) {
+        exitCode = typeof error.code === "number" ? error.code : null;
+      }
       resolve({ exitCode, stdout, stderr });
     });
   });
