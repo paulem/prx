@@ -1,7 +1,39 @@
+import * as clack from "@clack/prompts";
 import { execFile, spawn } from "node:child_process";
 import { access, constants, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
+
+export type PromptAnswer<T> = { kind: "answered"; value: T } | { kind: "cancelled" };
+
+export interface SelectOption<T extends string> {
+  value: T;
+  label: string;
+}
+
+export interface SelectQuestion<T extends string> {
+  message: string;
+  options: SelectOption<T>[];
+}
+
+export interface TextQuestion {
+  message: string;
+  initialValue: string;
+  /** Returns the problem with an input, or undefined when it is acceptable */
+  validate: (input: string) => string | undefined;
+}
+
+export interface ConfirmQuestion {
+  message: string;
+  initialValue: boolean;
+}
+
+/** Interactive questions, answered by a person at the terminal or scripted by a test */
+export interface Prompter {
+  select: <T extends string>(question: SelectQuestion<T>) => Promise<PromptAnswer<T>>;
+  text: (question: TextQuestion) => Promise<PromptAnswer<string>>;
+  confirm: (question: ConfirmQuestion) => Promise<PromptAnswer<boolean>>;
+}
 
 export interface SpawnRequest {
   command: string;
@@ -43,6 +75,7 @@ export interface SystemAdapter {
   launchDetached: (request: LaunchRequest) => Promise<void>;
   /** Whether an app from an Applications folder has a running instance */
   isApplicationRunning: (name: string) => Promise<boolean>;
+  prompt: Prompter;
 }
 
 export function createNodeSystemAdapter(env: NodeJS.ProcessEnv = process.env): SystemAdapter {
@@ -118,7 +151,35 @@ export function createNodeSystemAdapter(env: NodeJS.ProcessEnv = process.env): S
         });
       });
     },
+    prompt: {
+      async select<T extends string>(question: SelectQuestion<T>) {
+        // clack types options through a conditional on the value type, which a generic cannot satisfy
+        const options = question.options as Parameters<typeof clack.select<T>>[0]["options"];
+        return answerFrom(await clack.select<T>({ message: question.message, options }));
+      },
+      async text(question) {
+        return answerFrom(
+          await clack.text({
+            message: question.message,
+            initialValue: question.initialValue,
+            validate: (input) => question.validate(input ?? ""),
+          }),
+        );
+      },
+      async confirm(question) {
+        return answerFrom(
+          await clack.confirm({ message: question.message, initialValue: question.initialValue }),
+        );
+      },
+    },
   };
+}
+
+function answerFrom<T>(value: T | symbol): PromptAnswer<T> {
+  if (clack.isCancel(value)) {
+    return { kind: "cancelled" };
+  }
+  return { kind: "answered", value: value as T };
 }
 
 // Checks every candidate at once; the earliest in the list still wins so PATH order is respected

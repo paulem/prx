@@ -2,6 +2,7 @@ import { Command, CommanderError } from "commander";
 import pkg from "../package.json" with { type: "json" };
 import { runCheck } from "./commands/check.ts";
 import { runConfig } from "./commands/config.ts";
+import { runInit } from "./commands/init.ts";
 import { runList } from "./commands/list.ts";
 import { runRun } from "./commands/run.ts";
 import { PrxError } from "./errors.ts";
@@ -22,7 +23,6 @@ interface PlannedCommand {
 }
 
 const plannedCommands: PlannedCommand[] = [
-  { usage: "init", description: "Set up the proxy interactively" },
   { usage: "uninstall", description: "Remove prx from this machine" },
 ];
 
@@ -99,6 +99,14 @@ export async function runCli(
         exitCode = NOT_IMPLEMENTED_EXIT_CODE;
       });
   }
+
+  program
+    .command("init")
+    .description("Set up the proxy interactively")
+    .action(async () => {
+      const reporter = createReporter(system, false);
+      await report(reporter, () => runInit({ system, probeTimeoutMs }));
+    });
 
   program
     .command("check")

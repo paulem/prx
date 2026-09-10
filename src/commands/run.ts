@@ -1,10 +1,11 @@
-import { proxyUrl, readConfig, type ProxyConfig } from "../config.ts";
+import { proxyUrl, readConfig, type Config, type ProxyConfig } from "../config.ts";
 import { PrxError } from "../errors.ts";
 import { argsInjection, envInjection, exitCodeFromOutcome, macOpenLaunch } from "../launch.ts";
 import type { Reporter } from "../output.ts";
 import { findPreset, locateApp, type Preset } from "../presets/index.ts";
 import { DEFAULT_PROBE_URL, probe } from "../probe.ts";
 import type { SystemAdapter } from "../system.ts";
+import { initWizard } from "./init.ts";
 
 export interface RunCommand {
   system: SystemAdapter;
@@ -27,7 +28,7 @@ export async function runRun(command: RunCommand): Promise<number> {
     );
   }
 
-  const config = await readConfig(system);
+  const config = await readConfigOrInit(command);
   const proxy = config.proxy;
 
   const appPath = await locateApp(system, preset.app);
@@ -81,6 +82,19 @@ function inject(preset: Preset, proxy: ProxyConfig): Injected {
     return { env: envInjection(proxy), args: [] };
   }
   return { env: {}, args: argsInjection(proxy) };
+}
+
+// A first run is never a dead end: without a config the wizard runs first, unless a wrapper
+// is parsing the output, since it cannot answer prompts
+async function readConfigOrInit(command: RunCommand): Promise<Config> {
+  try {
+    return await readConfig(command.system);
+  } catch (error) {
+    if (error instanceof PrxError && error.code === "config_missing" && !command.json) {
+      return initWizard({ system: command.system, probeTimeoutMs: command.probeTimeoutMs });
+    }
+    throw error;
+  }
 }
 
 async function probeBeforeLaunch(

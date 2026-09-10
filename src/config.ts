@@ -23,6 +23,43 @@ export function proxyUrl(proxy: ProxyConfig): string {
   return `http://${proxy.host}:${proxy.port}`;
 }
 
+export type ParsedAddress = { ok: true; proxy: ProxyConfig } | { ok: false; message: string };
+
+const ADDRESS_FORMAT_MESSAGE = "Enter host:port or http://host:port";
+
+/** Reads a proxy address typed by a person, as host:port or http://host:port */
+export function parseProxyAddress(input: string): ParsedAddress {
+  const trimmed = input.trim();
+  if (isPortOutOfRange(trimmed)) {
+    return { ok: false, message: PORT_RANGE_MESSAGE };
+  }
+  const withScheme = trimmed.includes("://") ? trimmed : `http://${trimmed}`;
+  let url: URL;
+  try {
+    url = new URL(withScheme);
+  } catch {
+    return { ok: false, message: ADDRESS_FORMAT_MESSAGE };
+  }
+  const isPlainHostAndPort =
+    url.protocol === "http:" &&
+    url.username === "" &&
+    url.pathname === "/" &&
+    url.search === "" &&
+    url.port !== "";
+  if (!isPlainHostAndPort) {
+    return { ok: false, message: ADDRESS_FORMAT_MESSAGE };
+  }
+  return { ok: true, proxy: { type: "http", host: url.hostname, port: Number(url.port) } };
+}
+
+const PORT_RANGE_MESSAGE = "Port must be between 1 and 65535";
+
+// The URL parser rejects an out-of-range port as malformed, so the range is checked on the text first
+function isPortOutOfRange(address: string): boolean {
+  const port = /:(\d+)\/?$/.exec(address)?.[1];
+  return port !== undefined && (Number(port) < 1 || Number(port) > 65535);
+}
+
 export async function readConfig(system: SystemAdapter): Promise<Config> {
   const path = configPath(system);
   const text = await system.readTextFile(path);
