@@ -1,6 +1,6 @@
 /**
  * The single seam between prx and the operating system. Every OS touchpoint
- * goes through here so tests and future wrappers can substitute it
+ * goes through here so tests can substitute it
  */
 export interface SystemAdapter {
   writeStdout: (text: string) => void;
