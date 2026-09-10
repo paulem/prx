@@ -1,9 +1,17 @@
 import { Command, CommanderError } from "commander";
 import pkg from "../package.json" with { type: "json" };
+import { runCheck } from "./commands/check.ts";
+import { PrxError } from "./errors.ts";
+import { createReporter } from "./output.ts";
+import { DEFAULT_PROBE_TIMEOUT_MS } from "./probe.ts";
 import type { SystemAdapter } from "./system.ts";
 
 const USAGE_ERROR_EXIT_CODE = 2;
 const NOT_IMPLEMENTED_EXIT_CODE = 1;
+
+export interface CliOptions {
+  probeTimeoutMs?: number;
+}
 
 interface PlannedCommand {
   usage: string;
@@ -13,13 +21,17 @@ interface PlannedCommand {
 const plannedCommands: PlannedCommand[] = [
   { usage: "run <preset> [passthrough...]", description: "Launch an app through the proxy" },
   { usage: "init", description: "Set up the proxy interactively" },
-  { usage: "check", description: "Probe the proxy and report whether it is live" },
   { usage: "list", description: "Show the presets and whether each app is installed" },
   { usage: "config", description: "Print the config path and contents" },
   { usage: "uninstall", description: "Remove prx from this machine" },
 ];
 
-export async function runCli(argv: readonly string[], system: SystemAdapter): Promise<number> {
+export async function runCli(
+  argv: readonly string[],
+  system: SystemAdapter,
+  options: CliOptions = {},
+): Promise<number> {
+  const probeTimeoutMs = options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
   let exitCode = 0;
 
   const program = new Command("prx")
@@ -31,6 +43,23 @@ export async function runCli(argv: readonly string[], system: SystemAdapter): Pr
       writeErr: system.writeStderr,
     })
     .showHelpAfterError("(add --help for the list of commands)");
+
+  program
+    .command("check")
+    .description("Probe the proxy and report whether it is live")
+    .option("--json", "Print the result as one JSON object")
+    .action(async (commandOptions: { json?: boolean }) => {
+      const reporter = createReporter(system, commandOptions.json === true);
+      try {
+        exitCode = await runCheck({ system, reporter, probeTimeoutMs });
+      } catch (error) {
+        if (!(error instanceof PrxError)) {
+          throw error;
+        }
+        reporter.error(error);
+        exitCode = error.exitCode;
+      }
+    });
 
   for (const planned of plannedCommands) {
     program
