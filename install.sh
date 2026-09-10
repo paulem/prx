@@ -36,10 +36,14 @@ if ! command -v node > /dev/null; then
   exit 1
 fi
 node_version="$(node --version)"
-node_version="${node_version#v}"
-node_major="${node_version%%.*}"
+node_major="${node_version#v}"
+node_major="${node_major%%.*}"
+if ! [[ "$node_major" =~ ^[0-9]+$ ]]; then
+  echo "prx needs Node $MINIMUM_NODE_MAJOR or newer, but node --version printed '$node_version'" >&2
+  exit 1
+fi
 if [ "$node_major" -lt "$MINIMUM_NODE_MAJOR" ]; then
-  echo "prx needs Node $MINIMUM_NODE_MAJOR or newer, found $node_version" >&2
+  echo "prx needs Node $MINIMUM_NODE_MAJOR or newer, found ${node_version#v}" >&2
   exit 1
 fi
 if ! command -v pnpm > /dev/null; then
@@ -48,6 +52,8 @@ if ! command -v pnpm > /dev/null; then
 fi
 
 cd "$(dirname "$0")"
+# A corepack-managed pnpm would otherwise ask before downloading the pinned version
+export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 pnpm install --frozen-lockfile --silent
 pnpm --silent build > /dev/null
 
@@ -56,10 +62,14 @@ install -m 755 dist/prx.js "$BINARY"
 echo "Installed prx to $BINARY"
 
 on_path() {
-  case ":$PATH:" in
-    *":$BIN_DIR:"*) return 0 ;;
-    *) return 1 ;;
-  esac
+  local entry entries
+  IFS=: read -ra entries <<< "$PATH"
+  for entry in "${entries[@]}"; do
+    if [ "${entry%/}" = "$BIN_DIR" ]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 has_path_block() {
@@ -74,6 +84,13 @@ if [ "$modify_path" = false ]; then
   exit 0
 fi
 
-# The literal $HOME keeps .zshrc portable; the blank line before the block goes with it on uninstall
-printf '\n%s\nexport PATH="$HOME/.local/bin:$PATH"\n%s\n' "$PATH_BLOCK_START" "$PATH_BLOCK_END" >> "$ZSHRC"
+# The block starts on its own line after one blank line, which uninstall removes with it
+if [ -s "$ZSHRC" ]; then
+  if [ "$(tail -c 1 "$ZSHRC")" != "" ]; then
+    echo >> "$ZSHRC"
+  fi
+  echo >> "$ZSHRC"
+fi
+# The literal $HOME keeps .zshrc portable
+printf '%s\nexport PATH="$HOME/.local/bin:$PATH"\n%s\n' "$PATH_BLOCK_START" "$PATH_BLOCK_END" >> "$ZSHRC"
 echo "Added $BIN_DIR to PATH in $ZSHRC, open a new shell to use prx"

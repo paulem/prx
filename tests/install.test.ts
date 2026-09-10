@@ -1,10 +1,9 @@
-import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { beforeAll, describe, expect, test } from "vitest";
 import pkg from "../package.json" with { type: "json" };
-import { isolatedHomeEnv, runNode, type ProcessResult } from "./built-bundle.ts";
+import { isolatedHomeEnv, runNode, runProcess, type ProcessResult } from "./built-bundle.ts";
 
 const REPO_ROOT = join(import.meta.dirname, "..");
 const INSTALL_SCRIPT = join(REPO_ROOT, "install.sh");
@@ -58,20 +57,7 @@ interface InstallOptions {
 function runInstall(home: Home, options: InstallOptions = {}): Promise<ProcessResult> {
   const path = [home.fakeBin, ...(options.pathPrefix ?? []), process.env.PATH].join(delimiter);
   const env = isolatedHomeEnv(home.dir, { PATH: path, FAKE_PNPM_LOG: home.pnpmLog });
-  return new Promise((resolve) => {
-    execFile(
-      "bash",
-      [INSTALL_SCRIPT, ...(options.args ?? [])],
-      { cwd: tmpdir(), env },
-      (error, stdout, stderr) => {
-        let exitCode: number | null = 0;
-        if (error) {
-          exitCode = typeof error.code === "number" ? error.code : null;
-        }
-        resolve({ exitCode, stdout, stderr });
-      },
-    );
-  });
+  return runProcess("bash", [INSTALL_SCRIPT, ...(options.args ?? [])], { cwd: tmpdir(), env });
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -167,6 +153,44 @@ describe("install.sh re-run and opt-outs", () => {
     INSTALL_TIMEOUT_MS,
   );
 
+  test(
+    "a PATH entry with a trailing slash still counts as on PATH",
+    async () => {
+      const home = await freshHome();
+
+      await runInstall(home, { pathPrefix: [`${join(home.dir, ".local", "bin")}/`] });
+
+      expect(await readFile(home.zshrc, "utf8")).toBe(ZSHRC_BEFORE);
+    },
+    INSTALL_TIMEOUT_MS,
+  );
+
+  test(
+    "a .zshrc without a trailing newline still gets the block on its own line",
+    async () => {
+      const home = await freshHome();
+      await writeFile(home.zshrc, "alias ll='ls -l'");
+
+      await runInstall(home);
+
+      expect(await readFile(home.zshrc, "utf8")).toBe(`${ZSHRC_BEFORE}\n${PATH_BLOCK}`);
+    },
+    INSTALL_TIMEOUT_MS,
+  );
+
+  test(
+    "a missing .zshrc is created with just the block",
+    async () => {
+      const home = await freshHome();
+      await rm(home.zshrc);
+
+      await runInstall(home);
+
+      expect(await readFile(home.zshrc, "utf8")).toBe(PATH_BLOCK);
+    },
+    INSTALL_TIMEOUT_MS,
+  );
+
   test("an unknown flag is a usage error", async () => {
     const home = await freshHome();
 
@@ -180,8 +204,8 @@ describe("install.sh re-run and opt-outs", () => {
   });
 });
 
-describe("install.sh on an old Node", () => {
-  test("fails with a clear message before building anything", async () => {
+describe("install.sh on an unusable Node", () => {
+  test("an old Node fails with a clear message before building anything", async () => {
     const home = await freshHome();
     await writeExecutable(join(home.fakeBin, "node"), "#!/bin/sh\necho v22.1.0\n");
 
@@ -193,6 +217,19 @@ describe("install.sh on an old Node", () => {
     expect(await exists(home.pnpmLog)).toBe(false);
     expect(await exists(home.binary)).toBe(false);
     expect(await readFile(home.zshrc, "utf8")).toBe(ZSHRC_BEFORE);
+  });
+
+  test("a version that is not a number fails instead of installing", async () => {
+    const home = await freshHome();
+    await writeExecutable(join(home.fakeBin, "node"), "#!/bin/sh\necho vnightly\n");
+
+    const result = await runInstall(home);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe(
+      "prx needs Node 24 or newer, but node --version printed 'vnightly'\n",
+    );
+    expect(await exists(home.binary)).toBe(false);
   });
 });
 
