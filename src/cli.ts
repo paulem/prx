@@ -25,6 +25,10 @@ interface RunOptions extends JsonOption {
   check: boolean;
 }
 
+interface YesOption {
+  yes?: boolean;
+}
+
 export async function runCli(
   argv: readonly string[],
   system: SystemAdapter,
@@ -120,7 +124,7 @@ export async function runCli(
     .command("uninstall")
     .description("Remove prx from this machine")
     .option("--yes", "Remove without asking")
-    .action(async (commandOptions: { yes?: boolean }) => {
+    .action(async (commandOptions: YesOption) => {
       const reporter = createReporter(system, false);
       await report(reporter, () => runUninstall({ system, yes: commandOptions.yes === true }));
     });
