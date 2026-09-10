@@ -23,13 +23,19 @@ export interface ProcessResult {
   stderr: string;
 }
 
-/** Runs this Node binary with the given arguments and captures what a terminal would see */
-export function runNode(
+export interface RunOptions {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+}
+
+/** Runs a command to completion and captures what a terminal would see */
+export function runProcess(
+  command: string,
   args: string[],
-  env: NodeJS.ProcessEnv = process.env,
+  options: RunOptions = {},
 ): Promise<ProcessResult> {
   return new Promise((resolve) => {
-    execFile(process.execPath, args, { env }, (error, stdout, stderr) => {
+    execFile(command, args, options, (error, stdout, stderr) => {
       let exitCode: number | null = 0;
       if (error) {
         exitCode = typeof error.code === "number" ? error.code : null;
@@ -37,6 +43,14 @@ export function runNode(
       resolve({ exitCode, stdout, stderr });
     });
   });
+}
+
+/** Runs this Node binary with the given arguments */
+export function runNode(
+  args: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<ProcessResult> {
+  return runProcess(process.execPath, args, { env });
 }
 
 /** The environment a subprocess gets when it must treat a temp directory as the user's home */
