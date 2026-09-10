@@ -1,6 +1,6 @@
 import * as clack from "@clack/prompts";
 import { execFile, spawn } from "node:child_process";
-import { access, constants, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { access, constants, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 
@@ -59,8 +59,12 @@ export interface SpawnOutcome {
 export interface SystemAdapter {
   writeStdout: (text: string) => void;
   writeStderr: (text: string) => void;
+  homeDir: () => string;
   /** The directory prx keeps its config in, honouring XDG_CONFIG_HOME */
   configDir: () => string;
+  pathExists: (path: string) => Promise<boolean>;
+  /** Deletes a file or a whole directory; a missing path is not an error */
+  remove: (path: string) => Promise<void>;
   /** Resolves to undefined when the file does not exist */
   readTextFile: (path: string) => Promise<string | undefined>;
   /** Creates missing parent directories */
@@ -86,9 +90,14 @@ export function createNodeSystemAdapter(env: NodeJS.ProcessEnv = process.env): S
     writeStderr(text) {
       process.stderr.write(text);
     },
+    homeDir: homedir,
     configDir() {
       const base = env.XDG_CONFIG_HOME || join(homedir(), ".config");
       return join(base, "prx");
+    },
+    pathExists,
+    async remove(path) {
+      await rm(path, { recursive: true, force: true });
     },
     async readTextFile(path) {
       try {

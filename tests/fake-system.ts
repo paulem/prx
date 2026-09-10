@@ -29,6 +29,8 @@ export interface FakeSystem {
   stderr: () => string;
   /** In-memory files keyed by absolute path */
   files: Map<string, string>;
+  /** Paths the CLI asked to delete, in order */
+  removed: string[];
   /** Commands the fake reports as installed on PATH, mapped to their path */
   onPath: Map<string, string>;
   /** Apps the fake reports as installed in an Applications folder, mapped to their bundle path */
@@ -60,6 +62,7 @@ export function createFakeSystem(): FakeSystem {
   const out: string[] = [];
   const err: string[] = [];
   const files = new Map<string, string>();
+  const removed: string[] = [];
   const onPath = new Map<string, string>();
   const applications = new Map<string, string>();
   const spawns: SpawnRequest[] = [];
@@ -85,7 +88,18 @@ export function createFakeSystem(): FakeSystem {
       writeStderr(text) {
         err.push(text);
       },
+      homeDir: () => FAKE_HOME,
       configDir: () => `${FAKE_HOME}/.config/prx`,
+      pathExists: async (path) =>
+        files.has(path) || [...files.keys()].some((file) => file.startsWith(`${path}/`)),
+      remove: async (path) => {
+        removed.push(path);
+        for (const file of files.keys()) {
+          if (file === path || file.startsWith(`${path}/`)) {
+            files.delete(file);
+          }
+        }
+      },
       readTextFile: async (path) => files.get(path),
       writeTextFile: async (path, text) => {
         files.set(path, text);
@@ -149,6 +163,7 @@ export function createFakeSystem(): FakeSystem {
     stdout: () => out.join(""),
     stderr: () => err.join(""),
     files,
+    removed,
     onPath,
     applications,
     spawns,

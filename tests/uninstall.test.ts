@@ -1,0 +1,112 @@
+import { describe, expect, test } from "vitest";
+import { runCli } from "../src/cli.ts";
+import {
+  CANCEL,
+  createFakeSystem,
+  FAKE_CONFIG_PATH,
+  writeFakeConfig,
+  type FakeSystem,
+} from "./fake-system.ts";
+
+const BINARY = "/home/test/.local/bin/prx";
+const ZSHRC = "/home/test/.zshrc";
+const PATH_BLOCK = '# >>> prx >>>\nexport PATH="$HOME/.local/bin:$PATH"\n# <<< prx <<<\n';
+const ZSHRC_BEFORE = "alias ll='ls -l'\n";
+const ZSHRC_AFTER = 'export EDITOR="vim"\n';
+
+function installedFake(): FakeSystem {
+  const fake = createFakeSystem();
+  fake.files.set(BINARY, "#!/usr/bin/env node\n");
+  writeFakeConfig(fake, { host: "127.0.0.1", port: 8118 });
+  fake.files.set(ZSHRC, `${ZSHRC_BEFORE}\n${PATH_BLOCK}${ZSHRC_AFTER}`);
+  return fake;
+}
+
+describe("prx uninstall", () => {
+  test("lists the binary, config directory and PATH block, asks once, and removes them", async () => {
+    const fake = installedFake();
+    fake.answers.push(true);
+
+    const exitCode = await runCli(["uninstall"], fake.system);
+
+    expect(exitCode).toBe(0);
+    expect(fake.stdout()).toBe(
+      "prx uninstall will remove:\n" +
+        `  ${BINARY}\n` +
+        "  /home/test/.config/prx\n" +
+        `  the prx PATH block in ${ZSHRC}\n` +
+        `Removed ${BINARY}\n` +
+        "Removed /home/test/.config/prx\n" +
+        `Removed the prx PATH block in ${ZSHRC}\n`,
+    );
+    expect(fake.questions).toEqual([
+      { kind: "confirm", message: "Remove these?", initialValue: false },
+    ]);
+    expect(fake.files.has(BINARY)).toBe(false);
+    expect(fake.files.has(FAKE_CONFIG_PATH)).toBe(false);
+    expect(fake.removed).toEqual([BINARY, "/home/test/.config/prx"]);
+  });
+
+  test("removes exactly the marked block from .zshrc", async () => {
+    const fake = installedFake();
+    fake.answers.push(true);
+
+    await runCli(["uninstall"], fake.system);
+
+    expect(fake.files.get(ZSHRC)).toBe(`${ZSHRC_BEFORE}${ZSHRC_AFTER}`);
+  });
+
+  test("--yes skips the confirmation", async () => {
+    const fake = installedFake();
+
+    const exitCode = await runCli(["uninstall", "--yes"], fake.system);
+
+    expect(exitCode).toBe(0);
+    expect(fake.questions).toEqual([]);
+    expect(fake.removed).toEqual([BINARY, "/home/test/.config/prx"]);
+  });
+
+  test("declining removes nothing", async () => {
+    const fake = installedFake();
+    fake.answers.push(false);
+
+    const exitCode = await runCli(["uninstall"], fake.system);
+
+    expect(exitCode).toBe(0);
+    expect(fake.stdout()).toMatch(/Nothing removed\n$/);
+    expect(fake.removed).toEqual([]);
+    expect(fake.files.get(ZSHRC)).toContain(PATH_BLOCK);
+  });
+
+  test("cancelling the prompt removes nothing", async () => {
+    const fake = installedFake();
+    fake.answers.push(CANCEL);
+
+    const exitCode = await runCli(["uninstall"], fake.system);
+
+    expect(exitCode).toBe(0);
+    expect(fake.removed).toEqual([]);
+  });
+
+  test("lists only what exists", async () => {
+    const fake = createFakeSystem();
+    writeFakeConfig(fake, { host: "127.0.0.1", port: 8118 });
+    fake.answers.push(true);
+
+    await runCli(["uninstall"], fake.system);
+
+    expect(fake.stdout()).toBe(
+      "prx uninstall will remove:\n  /home/test/.config/prx\nRemoved /home/test/.config/prx\n",
+    );
+  });
+
+  test("says so when there is nothing to remove", async () => {
+    const fake = createFakeSystem();
+
+    const exitCode = await runCli(["uninstall"], fake.system);
+
+    expect(exitCode).toBe(0);
+    expect(fake.stdout()).toBe("Nothing to remove, prx is not installed\n");
+    expect(fake.questions).toEqual([]);
+  });
+});

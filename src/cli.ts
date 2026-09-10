@@ -5,26 +5,17 @@ import { runConfig } from "./commands/config.ts";
 import { runInit } from "./commands/init.ts";
 import { runList } from "./commands/list.ts";
 import { runRun } from "./commands/run.ts";
+import { runUninstall } from "./commands/uninstall.ts";
 import { PrxError } from "./errors.ts";
 import { createReporter, type Reporter } from "./output.ts";
 import { DEFAULT_PROBE_TIMEOUT_MS } from "./probe.ts";
 import type { SystemAdapter } from "./system.ts";
 
 const USAGE_ERROR_EXIT_CODE = 2;
-const NOT_IMPLEMENTED_EXIT_CODE = 1;
 
 export interface CliOptions {
   probeTimeoutMs?: number;
 }
-
-interface PlannedCommand {
-  usage: string;
-  description: string;
-}
-
-const plannedCommands: PlannedCommand[] = [
-  { usage: "uninstall", description: "Remove prx from this machine" },
-];
 
 interface JsonOption {
   json?: boolean;
@@ -90,16 +81,6 @@ export async function runCli(
       );
     });
 
-  for (const planned of plannedCommands) {
-    program
-      .command(planned.usage)
-      .description(planned.description)
-      .action(function notImplemented(this: Command) {
-        system.writeStderr(`prx ${this.name()} is not implemented yet\n`);
-        exitCode = NOT_IMPLEMENTED_EXIT_CODE;
-      });
-  }
-
   program
     .command("init")
     .description("Set up the proxy interactively")
@@ -133,6 +114,15 @@ export async function runCli(
     .action(async (commandOptions: JsonOption) => {
       const reporter = createReporter(system, commandOptions.json === true);
       await report(reporter, () => runConfig({ system, reporter }));
+    });
+
+  program
+    .command("uninstall")
+    .description("Remove prx from this machine")
+    .option("--yes", "Remove without asking")
+    .action(async (commandOptions: { yes?: boolean }) => {
+      const reporter = createReporter(system, false);
+      await report(reporter, () => runUninstall({ system, yes: commandOptions.yes === true }));
     });
 
   if (argv.length === 0) {
