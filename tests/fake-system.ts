@@ -6,6 +6,10 @@ export interface FakeSystem {
   stderr: () => string;
   /** In-memory files keyed by absolute path */
   files: Map<string, string>;
+  /** Commands the fake reports as installed on PATH, mapped to their path */
+  onPath: Map<string, string>;
+  /** Apps the fake reports as installed in an Applications folder, mapped to their bundle path */
+  applications: Map<string, string>;
 }
 
 export const FAKE_HOME = "/home/test";
@@ -15,6 +19,8 @@ export function createFakeSystem(): FakeSystem {
   const out: string[] = [];
   const err: string[] = [];
   const files = new Map<string, string>();
+  const onPath = new Map<string, string>();
+  const applications = new Map<string, string>();
   return {
     system: {
       writeStdout(text) {
@@ -28,10 +34,14 @@ export function createFakeSystem(): FakeSystem {
       writeTextFile: async (path, text) => {
         files.set(path, text);
       },
+      findOnPath: async (command) => onPath.get(command),
+      findApplication: async (name) => applications.get(name),
     },
     stdout: () => out.join(""),
     stderr: () => err.join(""),
     files,
+    onPath,
+    applications,
   };
 }
 

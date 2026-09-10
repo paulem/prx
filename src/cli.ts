@@ -1,8 +1,10 @@
 import { Command, CommanderError } from "commander";
 import pkg from "../package.json" with { type: "json" };
 import { runCheck } from "./commands/check.ts";
+import { runConfig } from "./commands/config.ts";
+import { runList } from "./commands/list.ts";
 import { PrxError } from "./errors.ts";
-import { createReporter } from "./output.ts";
+import { createReporter, type Reporter } from "./output.ts";
 import { DEFAULT_PROBE_TIMEOUT_MS } from "./probe.ts";
 import type { SystemAdapter } from "./system.ts";
 
@@ -21,10 +23,12 @@ interface PlannedCommand {
 const plannedCommands: PlannedCommand[] = [
   { usage: "run <preset> [passthrough...]", description: "Launch an app through the proxy" },
   { usage: "init", description: "Set up the proxy interactively" },
-  { usage: "list", description: "Show the presets and whether each app is installed" },
-  { usage: "config", description: "Print the config path and contents" },
   { usage: "uninstall", description: "Remove prx from this machine" },
 ];
+
+interface JsonOption {
+  json?: boolean;
+}
 
 export async function runCli(
   argv: readonly string[],
@@ -33,6 +37,19 @@ export async function runCli(
 ): Promise<number> {
   const probeTimeoutMs = options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
   let exitCode = 0;
+
+  // Commands report their own failures; commander only sees usage errors
+  async function report(reporter: Reporter, command: () => Promise<number>): Promise<void> {
+    try {
+      exitCode = await command();
+    } catch (error) {
+      if (!(error instanceof PrxError)) {
+        throw error;
+      }
+      reporter.error(error);
+      exitCode = error.exitCode;
+    }
+  }
 
   const program = new Command("prx")
     .description(pkg.description)
@@ -44,23 +61,6 @@ export async function runCli(
     })
     .showHelpAfterError("(add --help for the list of commands)");
 
-  program
-    .command("check")
-    .description("Probe the proxy and report whether it is live")
-    .option("--json", "Print the result as one JSON object")
-    .action(async (commandOptions: { json?: boolean }) => {
-      const reporter = createReporter(system, commandOptions.json === true);
-      try {
-        exitCode = await runCheck({ system, reporter, probeTimeoutMs });
-      } catch (error) {
-        if (!(error instanceof PrxError)) {
-          throw error;
-        }
-        reporter.error(error);
-        exitCode = error.exitCode;
-      }
-    });
-
   for (const planned of plannedCommands) {
     program
       .command(planned.usage)
@@ -70,6 +70,33 @@ export async function runCli(
         exitCode = NOT_IMPLEMENTED_EXIT_CODE;
       });
   }
+
+  program
+    .command("check")
+    .description("Probe the proxy and report whether it is live")
+    .option("--json", "Print the result as one JSON object")
+    .action(async (commandOptions: JsonOption) => {
+      const reporter = createReporter(system, commandOptions.json === true);
+      await report(reporter, () => runCheck({ system, reporter, probeTimeoutMs }));
+    });
+
+  program
+    .command("list")
+    .description("Show the presets and whether each app is installed")
+    .option("--json", "Print the result as one JSON object")
+    .action(async (commandOptions: JsonOption) => {
+      const reporter = createReporter(system, commandOptions.json === true);
+      await report(reporter, () => runList({ system, reporter }));
+    });
+
+  program
+    .command("config")
+    .description("Print the config path and contents")
+    .option("--json", "Print the result as one JSON object")
+    .action(async (commandOptions: JsonOption) => {
+      const reporter = createReporter(system, commandOptions.json === true);
+      await report(reporter, () => runConfig({ system, reporter }));
+    });
 
   if (argv.length === 0) {
     program.outputHelp();
