@@ -3,22 +3,25 @@ import pkg from "../package.json" with { type: "json" };
 import type { SystemAdapter } from "./system.ts";
 
 const USAGE_ERROR_EXIT_CODE = 2;
+const NOT_IMPLEMENTED_EXIT_CODE = 1;
 
 interface PlannedCommand {
-  name: string;
+  usage: string;
   description: string;
 }
 
 const plannedCommands: PlannedCommand[] = [
-  { name: "run <preset> [passthrough...]", description: "Launch an app through the proxy" },
-  { name: "init", description: "Set up the proxy interactively" },
-  { name: "check", description: "Probe the proxy and report whether it is live" },
-  { name: "list", description: "Show the presets and whether each app is installed" },
-  { name: "config", description: "Print the config path and contents" },
-  { name: "uninstall", description: "Remove prx from this machine" },
+  { usage: "run <preset> [passthrough...]", description: "Launch an app through the proxy" },
+  { usage: "init", description: "Set up the proxy interactively" },
+  { usage: "check", description: "Probe the proxy and report whether it is live" },
+  { usage: "list", description: "Show the presets and whether each app is installed" },
+  { usage: "config", description: "Print the config path and contents" },
+  { usage: "uninstall", description: "Remove prx from this machine" },
 ];
 
 export async function runCli(argv: readonly string[], system: SystemAdapter): Promise<number> {
+  let exitCode = 0;
+
   const program = new Command("prx")
     .description(pkg.description)
     .version(pkg.version)
@@ -31,21 +34,22 @@ export async function runCli(argv: readonly string[], system: SystemAdapter): Pr
 
   for (const planned of plannedCommands) {
     program
-      .command(planned.name)
+      .command(planned.usage)
       .description(planned.description)
       .action(function notImplemented(this: Command) {
-        this.error(`prx ${this.name()} is not implemented yet`, { code: "prx.notImplemented" });
+        system.writeStderr(`prx ${this.name()} is not implemented yet\n`);
+        exitCode = NOT_IMPLEMENTED_EXIT_CODE;
       });
   }
 
   if (argv.length === 0) {
     program.outputHelp();
-    return 0;
+    return exitCode;
   }
 
   try {
     await program.parseAsync([...argv], { from: "user" });
-    return 0;
+    return exitCode;
   } catch (error) {
     if (!(error instanceof CommanderError)) {
       throw error;
@@ -53,9 +57,6 @@ export async function runCli(argv: readonly string[], system: SystemAdapter): Pr
     if (error.exitCode === 0) {
       return 0;
     }
-    if (error.code.startsWith("commander.")) {
-      return USAGE_ERROR_EXIT_CODE;
-    }
-    return error.exitCode;
+    return USAGE_ERROR_EXIT_CODE;
   }
 }
