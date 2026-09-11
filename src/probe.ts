@@ -41,15 +41,23 @@ export async function probe(endpoint: Endpoint, options: ProbeOptions): Promise<
   }
 }
 
-/** Probes again and again until the endpoint is live or the timeout has passed, reporting the last result */
+export interface ProbeUntilLiveOptions extends ProbeOptions {
+  /** How long to keep probing; each attempt still gets at most timeoutMs */
+  waitMs: number;
+}
+
+/** Probes again and again until the endpoint is live or the wait has passed, reporting the last result */
 export async function probeUntilLive(
   endpoint: Endpoint,
-  options: ProbeOptions,
+  options: ProbeUntilLiveOptions,
 ): Promise<ProbeResult> {
-  const deadline = performance.now() + options.timeoutMs;
+  const deadline = performance.now() + options.waitMs;
   for (;;) {
     const remainingMs = Math.ceil(deadline - performance.now());
-    const result = await probe(endpoint, { url: options.url, timeoutMs: remainingMs });
+    const result = await probe(endpoint, {
+      url: options.url,
+      timeoutMs: Math.min(options.timeoutMs, remainingMs),
+    });
     if (result.live || deadline - performance.now() - RETRY_DELAY_MS < MIN_ATTEMPT_MS) {
       return result;
     }

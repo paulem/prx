@@ -20,6 +20,7 @@ export interface RunCommand {
   system: SystemAdapter;
   reporter: Reporter;
   probeTimeoutMs: number;
+  startTimeoutMs: number;
   presetName: string;
   passthrough: string[];
   check: boolean;
@@ -143,7 +144,11 @@ async function readConfigOrInit(command: RunCommand): Promise<Config> {
     return await readConfig(command.system);
   } catch (error) {
     if (error instanceof PrxError && error.code === "config_missing" && !command.json) {
-      return initWizard({ system: command.system, probeTimeoutMs: command.probeTimeoutMs });
+      return initWizard({
+        system: command.system,
+        probeTimeoutMs: command.probeTimeoutMs,
+        startTimeoutMs: command.startTimeoutMs,
+      });
     }
     throw error;
   }
@@ -159,8 +164,8 @@ async function startIfStopped(system: SystemAdapter, proxy: ProxyConfig): Promis
   return true;
 }
 
-// A proxy that was just started gets the whole timeout to come up; one that was already there
-// is probed once
+// A proxy that was just started gets the whole start timeout to come up; one that was already
+// there is probed once
 async function probeBeforeLaunch(
   command: RunCommand,
   preset: Preset,
@@ -170,11 +175,10 @@ async function probeBeforeLaunch(
   if (!command.check) {
     return null;
   }
-  const probeEndpoint = justStarted ? probeUntilLive : probe;
-  const result = await probeEndpoint(endpoint, {
-    url: preset.probeUrl ?? DEFAULT_PROBE_URL,
-    timeoutMs: command.probeTimeoutMs,
-  });
+  const options = { url: preset.probeUrl ?? DEFAULT_PROBE_URL, timeoutMs: command.probeTimeoutMs };
+  const result = justStarted
+    ? await probeUntilLive(endpoint, { ...options, waitMs: command.startTimeoutMs })
+    : await probe(endpoint, options);
   if (!result.live) {
     throw new PrxError(
       "proxy_not_live",

@@ -24,6 +24,7 @@ import { bringUp, formatUpReport } from "./up.ts";
 export interface InitCommand {
   system: SystemAdapter;
   probeTimeoutMs: number;
+  startTimeoutMs: number;
 }
 
 const ENDPOINT_LABELS: Record<EndpointType, string> = { http: "HTTP", socks: "SOCKS" };
@@ -48,7 +49,7 @@ export async function runInit(command: InitCommand): Promise<number> {
 
 /** Asks for the proxy, probes it, and writes the config; throws when the person backs out */
 export async function initWizard(command: InitCommand): Promise<Config> {
-  const { system, probeTimeoutMs } = command;
+  const { system, probeTimeoutMs, startTimeoutMs } = command;
   const source = answerOrCancel(
     await system.prompt.select<"external" | "built-in">({
       message: "Proxy source",
@@ -72,7 +73,8 @@ export async function initWizard(command: InitCommand): Promise<Config> {
       initialValue: true,
     });
     if (startNow.kind === "answered" && startNow.value) {
-      system.writeStdout(formatUpReport(system, await bringUp(system, proxy, probeTimeoutMs)));
+      const report = await bringUp(system, proxy, probeTimeoutMs, startTimeoutMs);
+      system.writeStdout(formatUpReport(system, report));
     }
   }
 

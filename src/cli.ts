@@ -1,5 +1,6 @@
 import { Command, CommanderError, Option } from "commander";
 import pkg from "../package.json" with { type: "json" };
+import { DEFAULT_START_TIMEOUT_MS } from "./builtin-proxy.ts";
 import { runConfig } from "./commands/config.ts";
 import { runDown } from "./commands/down.ts";
 import { runInit } from "./commands/init.ts";
@@ -18,6 +19,7 @@ const USAGE_ERROR_EXIT_CODE = 2;
 
 export interface CliOptions {
   probeTimeoutMs?: number;
+  startTimeoutMs?: number;
 }
 
 interface JsonOption {
@@ -39,6 +41,7 @@ export async function runCli(
   options: CliOptions = {},
 ): Promise<number> {
   const probeTimeoutMs = options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
+  const startTimeoutMs = options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS;
   let exitCode = 0;
 
   // Commands report their own failures; commander only sees usage errors
@@ -87,6 +90,7 @@ export async function runCli(
           system,
           reporter,
           probeTimeoutMs,
+          startTimeoutMs,
           presetName,
           passthrough,
           check: commandOptions.check,
@@ -101,7 +105,7 @@ export async function runCli(
     .description("Set up an external or built-in proxy interactively")
     .action(async () => {
       const reporter = createReporter(system, false);
-      await report(reporter, () => runInit({ system, probeTimeoutMs }));
+      await report(reporter, () => runInit({ system, probeTimeoutMs, startTimeoutMs }));
     });
 
   program
@@ -110,7 +114,7 @@ export async function runCli(
     .option("--json", "Print the result as one JSON object")
     .action(async (commandOptions: JsonOption) => {
       const reporter = createReporter(system, commandOptions.json === true);
-      await report(reporter, () => runUp({ system, reporter, probeTimeoutMs }));
+      await report(reporter, () => runUp({ system, reporter, probeTimeoutMs, startTimeoutMs }));
     });
 
   program

@@ -114,7 +114,10 @@ describe("prx run with a stopped built-in proxy", () => {
     const { fake, endpoints } = await withStoppedProxy();
     await endpoints.http.close();
 
-    const exitCode = await runCli(["run", "claude"], fake.system, { probeTimeoutMs: 300 });
+    const exitCode = await runCli(["run", "claude"], fake.system, {
+      probeTimeoutMs: 300,
+      startTimeoutMs: 300,
+    });
 
     expect(exitCode).toBe(1);
     expect(fake.backgroundStarts).toHaveLength(2);

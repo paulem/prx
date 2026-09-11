@@ -42,7 +42,7 @@ prx: http endpoint http://127.0.0.1:8118 is live (42 ms), launching claude
 prx: socks endpoint socks5://127.0.0.1:1080 is live (31 ms), launching chrome
 ```
 
-A built-in proxy that is not running, after a reboot for instance, is started first, exactly as `prx up` starts it and with the same `dependency_missing` and `port_in_use` refusals. `run` then waits up to the probe timeout for the chosen endpoint alone to come live and says so on stderr before the launch line:
+A built-in proxy that is not running, after a reboot for instance, is started first, exactly as `prx up` starts it and with the same `dependency_missing` and `port_in_use` refusals. `run` then waits up to the start timeout for the chosen endpoint alone to come live and says so on stderr before the launch line:
 
 ```
 prx: started the built-in proxy
@@ -71,7 +71,7 @@ Both paths end by listing the presets with whether each app was found on this ma
 
 ### `prx up`
 
-Starts the built-in proxy in the background and returns once its endpoints are live. It refuses with `not_builtin` on an external proxy, since there is nothing for prx to start. Before starting anything it checks that `autossh` and `privoxy` are on `PATH`, refusing with `dependency_missing` and the install command when one is not, and that both ports are free, refusing with `port_in_use` otherwise, so the proxy never listens on a port other than the one apps are injected with. Then it writes the privoxy config, starts autossh and privoxy, and waits up to the probe timeout for both endpoints to be live before printing the same report as `status`:
+Starts the built-in proxy in the background and returns once its endpoints are live. It refuses with `not_builtin` on an external proxy, since there is nothing for prx to start. Before starting anything it checks that `autossh` and `privoxy` are on `PATH`, refusing with `dependency_missing` and the install command when one is not, and that both ports are free, refusing with `port_in_use` otherwise, so the proxy never listens on a port other than the one apps are injected with. Then it writes the privoxy config, starts autossh and privoxy, and waits up to the start timeout, thirty seconds, for both endpoints to be live before printing the same report as `status`. The wait is longer than a single probe because a tunnel that stalls right after connecting takes ten seconds of keepalive silence to notice, and autossh needs a reconnect on top:
 
 ```
 Built-in proxy started
@@ -251,7 +251,7 @@ The config lives at `~/.config/prx/config.json`, or under `$XDG_CONFIG_HOME/prx/
 }
 ```
 
-`identityFile` is optional; without it ssh uses the keys in ssh-agent. A config in the earlier single-address shape is reported as invalid with a pointer to `prx init`. Probe URLs and the timeout are not stored, they are code-level defaults.
+`identityFile` is optional; without it ssh uses the keys in ssh-agent. A config in the earlier single-address shape is reported as invalid with a pointer to `prx init`. Probe URLs and the timeouts are not stored, they are code-level defaults.
 
 ## Exit codes
 

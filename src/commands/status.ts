@@ -61,16 +61,25 @@ export function formatBuiltInReport(
   return `${headline}\n${formatEndpointReports(reports)}${logHint}`;
 }
 
-/** Probes every endpoint of the proxy at once with the default probe URL */
+/** Probes every endpoint of the proxy at once, with one probe attempt each */
 export function probeEndpoints(
   proxy: ProxyConfig,
   probeTimeoutMs: number,
-  probeEndpoint: typeof probe = probe,
+): Promise<EndpointReport[]> {
+  return probeEndpointsWith(proxy, (endpoint) =>
+    probe(endpoint, { url: DEFAULT_PROBE_URL, timeoutMs: probeTimeoutMs }),
+  );
+}
+
+/** Runs the given probe against every endpoint of the proxy at once */
+export function probeEndpointsWith(
+  proxy: ProxyConfig,
+  probeEndpoint: (endpoint: Endpoint) => Promise<ProbeResult>,
 ): Promise<EndpointReport[]> {
   return Promise.all(
     proxyEndpoints(proxy).map(async (endpoint) => ({
       endpoint,
-      result: await probeEndpoint(endpoint, { url: DEFAULT_PROBE_URL, timeoutMs: probeTimeoutMs }),
+      result: await probeEndpoint(endpoint),
     })),
   );
 }

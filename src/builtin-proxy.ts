@@ -7,6 +7,13 @@ import type { BackgroundRequest, SystemAdapter } from "./system.ts";
 export const DEPENDENCIES = ["autossh", "privoxy"] as const;
 export const INSTALL_HINT = "brew install autossh privoxy";
 
+/**
+ * How long a freshly started proxy gets to become live. A tunnel that stalls once needs the
+ * ServerAlive window (10 s) for ssh to give up, then a ConnectTimeout (10 s) at worst for
+ * autossh to reconnect, so the wait covers both with room for the handshake
+ */
+export const DEFAULT_START_TIMEOUT_MS = 30_000;
+
 type Dependency = (typeof DEPENDENCIES)[number];
 
 interface ProcessPaths {

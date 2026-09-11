@@ -166,7 +166,10 @@ describe("prx up", () => {
     const fake = await withDependencies(false);
     const { socksPort, httpPort } = ports(fake);
 
-    const exitCode = await runCli(["up"], fake.system, { probeTimeoutMs: 300 });
+    const exitCode = await runCli(["up"], fake.system, {
+      probeTimeoutMs: 300,
+      startTimeoutMs: 300,
+    });
 
     expect(exitCode).toBe(1);
     expect(fake.backgroundStarts).toHaveLength(2);
@@ -194,6 +197,25 @@ describe("prx up", () => {
 
     expect(exitCode).toBe(0);
     expect(fake.stdout()).toContain(`Endpoint http://127.0.0.1:${slowStarter.port} is live`);
+  });
+
+  test("waits past a single probe timeout for an endpoint that stalls and then heals", async () => {
+    const fake = await withDependencies(true);
+    const { socksPort } = ports(fake);
+    const stalled = await startTestProxy("silent");
+    writeFakeConfig(fake, builtInProxy({ socksPort, httpPort: stalled.port }));
+    setTimeout(async () => {
+      await stalled.close();
+      proxies.push(await startTestProxy("live", stalled.port));
+    }, 800);
+
+    const exitCode = await runCli(["up"], fake.system, {
+      probeTimeoutMs: 300,
+      startTimeoutMs: 3000,
+    });
+
+    expect(fake.stdout()).toContain(`Endpoint http://127.0.0.1:${stalled.port} is live`);
+    expect(exitCode).toBe(0);
   });
 
   test("a second up reports already running, starts nothing, and still probes", async () => {
