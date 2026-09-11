@@ -98,7 +98,8 @@ describe("prx run chrome", () => {
     expect(exitCode).toBe(1);
     expect(fake.launches).toEqual([]);
     expect(fake.stderr()).toBe(
-      `Endpoint socks5://127.0.0.1:${socks?.port} is not live: connection refused (ECONNREFUSED)\n`,
+      `Endpoint socks5://127.0.0.1:${socks?.port} is not live: connection refused (ECONNREFUSED). ` +
+        "Run prx status to see every endpoint.\n",
     );
   });
 
@@ -125,6 +126,7 @@ describe("prx run chrome", () => {
       error: {
         code: "endpoint_missing",
         message: "The proxy has no socks endpoint. Run prx init to record one.",
+        hint: "Run prx init to record one.",
       },
     });
   });
@@ -191,6 +193,7 @@ describe("prx run chrome", () => {
         code: "app_already_running",
         message:
           "Google Chrome is already running. Chrome ignores proxy flags when an instance exists, so quit it and run again.",
+        hint: "Chrome ignores proxy flags when an instance exists, so quit it and run again.",
       },
     });
   });

@@ -8,7 +8,7 @@ import {
   writeFakeConfig,
   type FakeSystem,
 } from "./fake-system.ts";
-import { startTestProxy, trustProbeTarget, type TestProxy } from "./test-proxy.ts";
+import { proxyPool, trustProbeTarget } from "./test-proxy.ts";
 
 const AUTOSSH = "/opt/homebrew/bin/autossh";
 const PRIVOXY = "/opt/homebrew/bin/privoxy";
@@ -31,24 +31,16 @@ beforeAll(() => {
   trustProbeTarget();
 });
 
-const proxies: TestProxy[] = [];
-afterEach(async () => {
-  await Promise.all(proxies.splice(0).map((proxy) => proxy.close()));
-});
-
-async function testProxy(mode: Parameters<typeof startTestProxy>[0]): Promise<TestProxy> {
-  const proxy = await startTestProxy(mode);
-  proxies.push(proxy);
-  return proxy;
-}
+const pool = proxyPool();
+afterEach(() => pool.closeAll());
 
 /** A fake with both dependencies installed and a built-in proxy whose endpoints are served by test proxies */
 async function withDependencies(live: boolean): Promise<FakeSystem> {
   const fake = createFakeSystem();
   fake.onPath.set("autossh", AUTOSSH);
   fake.onPath.set("privoxy", PRIVOXY);
-  const http = await testProxy("live");
-  const socks = await testProxy("socks");
+  const http = await pool.open("live");
+  const socks = await pool.open("socks");
   if (!live) {
     await http.close();
     await socks.close();
@@ -186,11 +178,10 @@ describe("prx up", () => {
   test("keeps probing until an endpoint comes up within the timeout", async () => {
     const fake = await withDependencies(true);
     const { socksPort } = ports(fake);
-    const slowStarter = await startTestProxy("live");
-    await slowStarter.close();
+    const slowStarter = await pool.closed();
     writeFakeConfig(fake, builtInProxy({ socksPort, httpPort: slowStarter.port }));
     setTimeout(async () => {
-      proxies.push(await startTestProxy("live", slowStarter.port));
+      await pool.open("live", slowStarter.port);
     }, 200);
 
     const exitCode = await upWith(fake);
@@ -202,11 +193,11 @@ describe("prx up", () => {
   test("waits past a single probe timeout for an endpoint that stalls and then heals", async () => {
     const fake = await withDependencies(true);
     const { socksPort } = ports(fake);
-    const stalled = await startTestProxy("silent");
+    const stalled = await pool.open("silent");
     writeFakeConfig(fake, builtInProxy({ socksPort, httpPort: stalled.port }));
     setTimeout(async () => {
       await stalled.close();
-      proxies.push(await startTestProxy("live", stalled.port));
+      await pool.open("live", stalled.port);
     }, 800);
 
     const exitCode = await runCli(["up"], fake.system, {
@@ -281,6 +272,7 @@ describe("prx up refusals", () => {
         code: "dependency_missing",
         message:
           "autossh and privoxy are not installed. Install them with: brew install autossh privoxy",
+        hint: "Install them with: brew install autossh privoxy",
       },
     });
   });

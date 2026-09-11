@@ -90,7 +90,8 @@ export async function findDependencies(system: SystemAdapter): Promise<Record<De
     const pronoun = missing.length === 1 ? "it" : "them";
     throw new PrxError(
       "dependency_missing",
-      `${subject} ${verb} not installed. Install ${pronoun} with: ${INSTALL_HINT}`,
+      `${subject} ${verb} not installed.`,
+      `Install ${pronoun} with: ${INSTALL_HINT}`,
     );
   }
   return { autossh: found[0] as string, privoxy: found[1] as string };

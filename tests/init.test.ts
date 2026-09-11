@@ -9,28 +9,14 @@ import {
   writeFakeConfig,
   type FakeSystem,
 } from "./fake-system.ts";
-import { startTestProxy, trustProbeTarget, type TestProxy } from "./test-proxy.ts";
+import { proxyPool, trustProbeTarget } from "./test-proxy.ts";
 
 beforeAll(() => {
   trustProbeTarget();
 });
 
-const proxies: TestProxy[] = [];
-afterEach(async () => {
-  await Promise.all(proxies.splice(0).map((proxy) => proxy.close()));
-});
-
-async function testProxy(mode: Parameters<typeof startTestProxy>[0]): Promise<TestProxy> {
-  const proxy = await startTestProxy(mode);
-  proxies.push(proxy);
-  return proxy;
-}
-
-async function closedPort(): Promise<TestProxy> {
-  const proxy = await startTestProxy("live");
-  await proxy.close();
-  return proxy;
-}
+const pool = proxyPool();
+afterEach(() => pool.closeAll());
 
 function savedConfig(fake: FakeSystem): unknown {
   const text = fake.files.get(FAKE_CONFIG_PATH);
@@ -43,7 +29,7 @@ function questionMessages(fake: FakeSystem): string[] {
 
 describe("prx init with an external proxy", () => {
   test("records an HTTP endpoint, probes it, saves and lists the presets", async () => {
-    const http = await testProxy("live");
+    const http = await pool.open("live");
     const fake = createFakeSystem();
     fake.onPath.set("claude", "/home/test/.local/bin/claude");
     fake.answers.push("external", true, `127.0.0.1:${http.port}`, false);
@@ -82,8 +68,8 @@ describe("prx init with an external proxy", () => {
   });
 
   test("records both endpoints and probes each one", async () => {
-    const http = await testProxy("live");
-    const socks = await testProxy("socks");
+    const http = await pool.open("live");
+    const socks = await pool.open("socks");
     const fake = createFakeSystem();
     fake.answers.push("external", true, `127.0.0.1:${http.port}`, true, `127.0.0.1:${socks.port}`);
 
@@ -105,7 +91,7 @@ describe("prx init with an external proxy", () => {
   });
 
   test("records only a SOCKS endpoint", async () => {
-    const socks = await testProxy("socks");
+    const socks = await pool.open("socks");
     const fake = createFakeSystem();
     fake.answers.push("external", false, true, `socks5://127.0.0.1:${socks.port}`);
 
@@ -116,7 +102,7 @@ describe("prx init with an external proxy", () => {
   });
 
   test("refuses to save no endpoint and asks again", async () => {
-    const http = await testProxy("live");
+    const http = await pool.open("live");
     const fake = createFakeSystem();
     fake.answers.push("external", false, false, true, `127.0.0.1:${http.port}`, false);
 
@@ -136,7 +122,7 @@ describe("prx init with an external proxy", () => {
   });
 
   test("accepts the http://host:port form", async () => {
-    const http = await testProxy("live");
+    const http = await pool.open("live");
     const fake = createFakeSystem();
     fake.answers.push("external", true, `http://localhost:${http.port}`, false);
 
@@ -162,7 +148,7 @@ describe("prx init with an external proxy", () => {
   });
 
   test("rejects a bad address with a clear message and asks again", async () => {
-    const http = await testProxy("live");
+    const http = await pool.open("live");
     const fake = createFakeSystem();
     fake.answers.push(
       "external",
@@ -186,8 +172,8 @@ describe("prx init with an external proxy", () => {
   });
 
   test("asks whether to save anyway when a probe fails, and saves on yes", async () => {
-    const http = await testProxy("live");
-    const socks = await closedPort();
+    const http = await pool.open("live");
+    const socks = await pool.closed();
     const fake = createFakeSystem();
     fake.answers.push(
       "external",
@@ -213,7 +199,7 @@ describe("prx init with an external proxy", () => {
   });
 
   test("declining to save anyway exits without writing", async () => {
-    const http = await closedPort();
+    const http = await pool.closed();
     const fake = createFakeSystem();
     fake.answers.push("external", true, `127.0.0.1:${http.port}`, false, false);
 
@@ -236,7 +222,7 @@ describe("prx init with an external proxy", () => {
   });
 
   test("re-running replaces the existing config", async () => {
-    const http = await testProxy("live");
+    const http = await pool.open("live");
     const fake = createFakeSystem();
     writeFakeConfig(fake, externalProxy({ http: { host: "10.0.0.1", port: 3128 } }));
     fake.answers.push("external", true, `127.0.0.1:${http.port}`, false);
@@ -249,7 +235,7 @@ describe("prx init with an external proxy", () => {
 
 describe("prx run on a first run", () => {
   test("starts the wizard when there is no config, then launches", async () => {
-    const http = await testProxy("live");
+    const http = await pool.open("live");
     const fake = createFakeSystem();
     fake.onPath.set("claude", "/home/test/.local/bin/claude");
     fake.answers.push("external", true, `127.0.0.1:${http.port}`, false);
@@ -464,8 +450,8 @@ describe("prx init with a built-in proxy", () => {
   });
 
   test("starting now runs the same flow as up and prints its report", async () => {
-    const http = await testProxy("live");
-    const socks = await testProxy("socks");
+    const http = await pool.open("live");
+    const socks = await pool.open("socks");
     const fake = withDependencies();
     fake.answers.push(
       "built-in",
@@ -531,8 +517,8 @@ describe("prx init with a built-in proxy", () => {
   });
 
   test("prx run without a config sets up a built-in proxy, starts it, and launches", async () => {
-    const http = await testProxy("live");
-    const socks = await testProxy("socks");
+    const http = await pool.open("live");
+    const socks = await pool.open("socks");
     const fake = withDependencies();
     fake.onPath.set("claude", "/home/test/.local/bin/claude");
     fake.answers.push(

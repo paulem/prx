@@ -29,14 +29,24 @@ const exitCodes: Record<ErrorCode, number> = {
   cancelled: PROXY_NOT_LIVE_EXIT_CODE,
 };
 
-/** A failure prx reports to the user itself, with a stable code for JSON mode and a fixed exit code */
+/**
+ * A failure prx reports to the user itself, with a stable code for JSON mode and a fixed exit code.
+ * The message joins the summary and the hint, for plain text and JSON; a decorated terminal
+ * shows the hint on its own line instead
+ */
 export class PrxError extends Error {
   readonly code: ErrorCode;
+  /** What went wrong, without the hint */
+  readonly summary: string;
+  /** The next command a person should run, when there is one */
+  readonly hint: string | undefined;
 
-  constructor(code: ErrorCode, message: string) {
-    super(message);
+  constructor(code: ErrorCode, summary: string, hint?: string) {
+    super(hint === undefined ? summary : `${summary} ${hint}`);
     this.name = "PrxError";
     this.code = code;
+    this.summary = summary;
+    this.hint = hint;
   }
 
   get exitCode(): number {

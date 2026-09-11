@@ -9,12 +9,14 @@ import {
   type ProxyConfig,
 } from "../config.ts";
 import { PrxError } from "../errors.ts";
-import { argsInjection, envInjection, exitCodeFromOutcome, macOpenLaunch } from "../launch.ts";
 import type { Reporter } from "../output.ts";
+import { argsInjection, envInjection, exitCodeFromOutcome, macOpenLaunch } from "../launch.ts";
 import { findPreset, locateApp, type Preset } from "../presets/index.ts";
-import { DEFAULT_PROBE_URL, probe, probeUntilLive } from "../probe.ts";
+import { DEFAULT_PROBE_URL, probe, probeUntilLive, type ProbeResult } from "../probe.ts";
+import { bold, dim, renderBlock, symbol } from "../style.ts";
 import type { SystemAdapter } from "../system.ts";
 import { initWizard } from "./init.ts";
+import { narrateWait, STARTING_MESSAGE } from "./up.ts";
 
 export interface RunCommand {
   system: SystemAdapter;
@@ -36,7 +38,8 @@ export async function runRun(command: RunCommand): Promise<number> {
   if (preset === undefined) {
     throw new PrxError(
       "unknown_preset",
-      `Unknown preset '${presetName}'. Run prx list to see the presets.`,
+      `Unknown preset '${presetName}'.`,
+      "Run prx list to see the presets.",
     );
   }
 
@@ -55,26 +58,42 @@ export async function runRun(command: RunCommand): Promise<number> {
     if (await system.isApplicationRunning(preset.app.name)) {
       throw new PrxError(
         "app_already_running",
-        `${preset.app.name} is already running. ${preset.refuseWhenRunning}`,
+        `${preset.app.name} is already running.`,
+        preset.refuseWhenRunning,
       );
     }
   }
 
-  const started = await startIfStopped(system, config.proxy);
-  if (started && !json) {
-    system.writeStderr("prx: started the built-in proxy\n");
+  const started = await startIfStopped(command, config.proxy);
+  if (started) {
+    reporter.notice({
+      plain: "prx: started the built-in proxy\n",
+      decorated: renderBlock({ mark: symbol("step"), lines: ["Built-in proxy started"] }),
+    });
   }
 
-  const latencyMs = await probeBeforeLaunch(command, preset, endpoint, started);
+  const latencyMs = await probeBeforeLaunch(
+    command,
+    preset,
+    endpoint,
+    started,
+    notLiveHint(config.proxy),
+  );
 
   if (json) {
-    reporter.result("", { preset: preset.name, endpoint, latencyMs });
+    reporter.json({ preset: preset.name, endpoint, latencyMs });
   } else {
-    const probeSummary =
+    const url = endpointUrl(endpoint);
+    const plainSummary =
       latencyMs === null ? "not probed (--no-check)" : `is live (${latencyMs} ms)`;
-    system.writeStderr(
-      `prx: ${endpoint.type} endpoint ${endpointUrl(endpoint)} ${probeSummary}, launching ${preset.name}\n`,
-    );
+    const decoratedSummary = latencyMs === null ? "not probed" : `${latencyMs} ms`;
+    reporter.notice({
+      plain: `prx: ${endpoint.type} endpoint ${url} ${plainSummary}, launching ${preset.name}\n`,
+      decorated: renderBlock({
+        mark: symbol("step"),
+        lines: [`${bold(preset.name)} via ${url}  ${dim(decoratedSummary)}`],
+      }),
+    });
   }
 
   const injected = inject(preset, endpoint);
@@ -106,7 +125,8 @@ function chooseEndpoint(
     if (endpoint === undefined) {
       throw new PrxError(
         "endpoint_missing",
-        `The proxy has no ${via} endpoint. Run prx init to record one.`,
+        `The proxy has no ${via} endpoint.`,
+        "Run prx init to record one.",
       );
     }
     return endpoint;
@@ -119,7 +139,8 @@ function chooseEndpoint(
   }
   throw new PrxError(
     "endpoint_missing",
-    `The proxy has no ${preset.endpoints.join(" or ")} endpoint, which ${preset.name} needs. Run prx init to record one.`,
+    `The proxy has no ${preset.endpoints.join(" or ")} endpoint, which ${preset.name} needs.`,
+    "Run prx init to record one.",
   );
 }
 
@@ -144,6 +165,7 @@ async function readConfigOrInit(command: RunCommand): Promise<Config> {
     if (error instanceof PrxError && error.code === "config_missing" && !command.json) {
       return initWizard({
         system: command.system,
+        reporter: command.reporter,
         probeTimeoutMs: command.probeTimeoutMs,
         startTimeoutMs: command.startTimeoutMs,
       });
@@ -154,11 +176,14 @@ async function readConfigOrInit(command: RunCommand): Promise<Config> {
 
 // A launch after a reboot is never a dead end: a built-in proxy that is not running is started
 // exactly as up starts it, with the same checks and errors
-async function startIfStopped(system: SystemAdapter, proxy: ProxyConfig): Promise<boolean> {
+async function startIfStopped(
+  { system, reporter }: RunCommand,
+  proxy: ProxyConfig,
+): Promise<boolean> {
   if (proxy.source !== "built-in" || (await isBuiltInProxyRunning(system))) {
     return false;
   }
-  await startBuiltInProxy(system, proxy);
+  await reporter.wait(STARTING_MESSAGE, () => startBuiltInProxy(system, proxy));
   return true;
 }
 
@@ -169,21 +194,39 @@ async function probeBeforeLaunch(
   preset: Preset,
   endpoint: Endpoint,
   justStarted: boolean,
+  hint: string,
 ): Promise<number | null> {
   if (!command.check) {
     return null;
   }
+  const url = endpointUrl(endpoint);
   const options = { url: preset.probeUrl ?? DEFAULT_PROBE_URL, timeoutMs: command.probeTimeoutMs };
-  const result = justStarted
-    ? await probeUntilLive(endpoint, { ...options, waitMs: command.startTimeoutMs })
-    : await probe(endpoint, options);
-  if (!result.live) {
-    throw new PrxError(
-      "proxy_not_live",
-      `Endpoint ${endpointUrl(endpoint)} is not live: ${result.message}`,
+  let result: ProbeResult;
+  if (justStarted) {
+    const narration = narrateWait(command.startTimeoutMs, () => url, [endpoint]);
+    result = await command.reporter.wait(narration.current(), (progress) =>
+      probeUntilLive(endpoint, {
+        ...options,
+        waitMs: command.startTimeoutMs,
+        onAttempt(attempt) {
+          narration.record(endpoint, attempt);
+          progress(narration.current());
+        },
+      }),
     );
+  } else {
+    result = await command.reporter.wait(`Probing ${url}`, () => probe(endpoint, options));
+  }
+  if (!result.live) {
+    throw new PrxError("proxy_not_live", `Endpoint ${url} is not live: ${result.message}.`, hint);
   }
   return result.latencyMs;
+}
+
+// A built-in proxy leaves logs worth pointing at; an external one has only its endpoints
+function notLiveHint(proxy: ProxyConfig): string {
+  const where = proxy.source === "built-in" ? " and the log directory" : "";
+  return `Run prx status to see every endpoint${where}.`;
 }
 
 function notFoundHint(preset: Preset): string {

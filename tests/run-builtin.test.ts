@@ -7,7 +7,7 @@ import {
   writeFakeConfig,
   type FakeSystem,
 } from "./fake-system.ts";
-import { startTestProxy, trustProbeTarget, type TestProxy } from "./test-proxy.ts";
+import { proxyPool, trustProbeTarget, type TestProxy } from "./test-proxy.ts";
 
 const CLAUDE_PATH = "/home/test/.local/bin/claude";
 const CHROME_PATH = "/Applications/Google Chrome.app";
@@ -16,16 +16,8 @@ beforeAll(() => {
   trustProbeTarget();
 });
 
-const proxies: TestProxy[] = [];
-afterEach(async () => {
-  await Promise.all(proxies.splice(0).map((proxy) => proxy.close()));
-});
-
-async function testProxy(mode: Parameters<typeof startTestProxy>[0]): Promise<TestProxy> {
-  const proxy = await startTestProxy(mode);
-  proxies.push(proxy);
-  return proxy;
-}
+const pool = proxyPool();
+afterEach(() => pool.closeAll());
 
 interface Endpoints {
   http: TestProxy;
@@ -39,7 +31,7 @@ async function withStoppedProxy(): Promise<{ fake: FakeSystem; endpoints: Endpoi
   fake.applications.set("Google Chrome", CHROME_PATH);
   fake.onPath.set("autossh", "/opt/homebrew/bin/autossh");
   fake.onPath.set("privoxy", "/opt/homebrew/bin/privoxy");
-  const endpoints = { http: await testProxy("live"), socks: await testProxy("socks") };
+  const endpoints = { http: await pool.open("live"), socks: await pool.open("socks") };
   writeFakeConfig(
     fake,
     builtInProxy({ socksPort: endpoints.socks.port, httpPort: endpoints.http.port }),
@@ -102,7 +94,7 @@ describe("prx run with a stopped built-in proxy", () => {
     const { fake, endpoints } = await withStoppedProxy();
     await endpoints.http.close();
     setTimeout(async () => {
-      proxies.push(await startTestProxy("live", endpoints.http.port));
+      await pool.open("live", endpoints.http.port);
     }, 200);
 
     const exitCode = await runWith(fake, ["claude"]);
@@ -125,7 +117,8 @@ describe("prx run with a stopped built-in proxy", () => {
     expect(fake.spawns).toEqual([]);
     expect(fake.stderr()).toBe(
       "prx: started the built-in proxy\n" +
-        `Endpoint http://127.0.0.1:${endpoints.http.port} is not live: connection refused (ECONNREFUSED)\n`,
+        `Endpoint http://127.0.0.1:${endpoints.http.port} is not live: connection refused (ECONNREFUSED). ` +
+        "Run prx status to see every endpoint and the log directory.\n",
     );
   });
 

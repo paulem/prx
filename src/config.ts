@@ -125,7 +125,11 @@ export async function readConfig(system: SystemAdapter): Promise<Config> {
   const path = configPath(system);
   const text = await system.readTextFile(path);
   if (text === undefined) {
-    throw new PrxError("config_missing", `No config found at ${path}. Run prx init to create one.`);
+    throw new PrxError(
+      "config_missing",
+      `No config found at ${path}.`,
+      "Run prx init to create one.",
+    );
   }
 
   let parsed: unknown;

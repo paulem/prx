@@ -8,28 +8,14 @@ import {
   writeFakeConfig,
   type FakeSystem,
 } from "./fake-system.ts";
-import { startTestProxy, trustProbeTarget, type TestProxy } from "./test-proxy.ts";
+import { proxyPool, trustProbeTarget } from "./test-proxy.ts";
 
 beforeAll(() => {
   trustProbeTarget();
 });
 
-const proxies: TestProxy[] = [];
-afterEach(async () => {
-  await Promise.all(proxies.splice(0).map((proxy) => proxy.close()));
-});
-
-async function testProxy(mode: Parameters<typeof startTestProxy>[0]): Promise<TestProxy> {
-  const proxy = await startTestProxy(mode);
-  proxies.push(proxy);
-  return proxy;
-}
-
-async function closedPort(): Promise<TestProxy> {
-  const proxy = await startTestProxy("live");
-  await proxy.close();
-  return proxy;
-}
+const pool = proxyPool();
+afterEach(() => pool.closeAll());
 
 async function statusOf(fake: FakeSystem, args: string[] = []): Promise<number> {
   return runCli(["status", ...args], fake.system, { probeTimeoutMs: 1000 });
@@ -37,8 +23,8 @@ async function statusOf(fake: FakeSystem, args: string[] = []): Promise<number> 
 
 describe("prx status on an external proxy", () => {
   test("probes both endpoints and prints one line each, exit 0 when both are live", async () => {
-    const http = await testProxy("live");
-    const socks = await testProxy("socks");
+    const http = await pool.open("live");
+    const socks = await pool.open("socks");
     const fake = createFakeSystem();
     writeFakeConfig(fake, externalProxy({ http, socks }));
 
@@ -55,8 +41,8 @@ describe("prx status on an external proxy", () => {
   });
 
   test("exits 1 when any endpoint is not live", async () => {
-    const http = await testProxy("live");
-    const socks = await closedPort();
+    const http = await pool.open("live");
+    const socks = await pool.closed();
     const fake = createFakeSystem();
     writeFakeConfig(fake, externalProxy({ http, socks }));
 
@@ -72,8 +58,8 @@ describe("prx status on an external proxy", () => {
   });
 
   test("--json prints one object with the source and each endpoint's result", async () => {
-    const http = await testProxy("live");
-    const socks = await closedPort();
+    const http = await pool.open("live");
+    const socks = await pool.closed();
     const fake = createFakeSystem();
     writeFakeConfig(fake, externalProxy({ http, socks }));
 
@@ -97,7 +83,7 @@ describe("prx status on an external proxy", () => {
   });
 
   test("a proxy with only a SOCKS endpoint is probed through SOCKS5", async () => {
-    const socks = await testProxy("socks");
+    const socks = await pool.open("socks");
     const fake = createFakeSystem();
     writeFakeConfig(fake, externalProxy({ socks }));
 
@@ -113,7 +99,7 @@ describe("prx status on an external proxy", () => {
   });
 
   test("a SOCKS handshake the proxy refuses is reported as rejected", async () => {
-    const socks = await testProxy("socks-reject");
+    const socks = await pool.open("socks-reject");
     const fake = createFakeSystem();
     writeFakeConfig(fake, externalProxy({ socks }));
 
@@ -129,7 +115,7 @@ describe("prx status on an external proxy", () => {
   });
 
   test("a rejected CONNECT is reported with the proxy's status", async () => {
-    const http = await testProxy("reject");
+    const http = await pool.open("reject");
     const fake = createFakeSystem();
     writeFakeConfig(fake, externalProxy({ http }));
 
@@ -144,7 +130,7 @@ describe("prx status on an external proxy", () => {
   });
 
   test("a proxy that never answers is reported as timed out", async () => {
-    const http = await testProxy("silent");
+    const http = await pool.open("silent");
     const fake = createFakeSystem();
     writeFakeConfig(fake, externalProxy({ http }));
 
@@ -168,8 +154,8 @@ function markRunning(fake: FakeSystem): void {
 
 describe("prx status on a built-in proxy", () => {
   test("prints the running state before the endpoint lines", async () => {
-    const http = await testProxy("live");
-    const socks = await testProxy("socks");
+    const http = await pool.open("live");
+    const socks = await pool.open("socks");
     const fake = createFakeSystem();
     writeFakeConfig(fake, builtInProxy({ socksPort: socks.port, httpPort: http.port }));
     markRunning(fake);
@@ -187,8 +173,8 @@ describe("prx status on a built-in proxy", () => {
   });
 
   test("names the log directory when running but not live", async () => {
-    const http = await closedPort();
-    const socks = await closedPort();
+    const http = await pool.closed();
+    const socks = await pool.closed();
     const fake = createFakeSystem();
     writeFakeConfig(fake, builtInProxy({ socksPort: socks.port, httpPort: http.port }));
     markRunning(fake);
@@ -205,8 +191,8 @@ describe("prx status on a built-in proxy", () => {
   });
 
   test("a stopped proxy is reported as not running without a log hint", async () => {
-    const http = await closedPort();
-    const socks = await closedPort();
+    const http = await pool.closed();
+    const socks = await pool.closed();
     const fake = createFakeSystem();
     writeFakeConfig(fake, builtInProxy({ socksPort: socks.port, httpPort: http.port }));
 
@@ -221,8 +207,8 @@ describe("prx status on a built-in proxy", () => {
   });
 
   test("--json gains running", async () => {
-    const http = await testProxy("live");
-    const socks = await testProxy("socks");
+    const http = await pool.open("live");
+    const socks = await pool.open("socks");
     const fake = createFakeSystem();
     writeFakeConfig(fake, builtInProxy({ socksPort: socks.port, httpPort: http.port }));
     markRunning(fake);
@@ -265,6 +251,7 @@ describe("prx status config errors", () => {
         code: "config_missing",
         message:
           "No config found at /home/test/.config/prx/config.json. Run prx init to create one.",
+        hint: "Run prx init to create one.",
       },
     });
     expect(fake.stderr()).toBe("");

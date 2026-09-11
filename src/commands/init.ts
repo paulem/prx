@@ -1,3 +1,4 @@
+import * as clack from "@clack/prompts";
 import { join } from "node:path";
 import { findDependencies } from "../builtin-proxy.ts";
 import {
@@ -16,13 +17,16 @@ import {
   type TunnelConfig,
 } from "../config.ts";
 import { PrxError } from "../errors.ts";
+import type { Reporter } from "../output.ts";
+import { bold, cyan, dim, pathLink, symbol, table, tildePath, type Cell } from "../style.ts";
 import type { PromptAnswer, SystemAdapter } from "../system.ts";
-import { formatPresetListing, listPresets } from "./list.ts";
-import { allLive, formatEndpointReports, probeEndpoints } from "./status.ts";
-import { bringUp, formatUpReport } from "./up.ts";
+import { formatPresetListing, listPresets, presetRows, type PresetListing } from "./list.ts";
+import { allLive, endpointRows, formatEndpointReports, probeEndpoints } from "./status.ts";
+import { bringUp, formatUpReport, upBlock } from "./up.ts";
 
 export interface InitCommand {
   system: SystemAdapter;
+  reporter: Reporter;
   probeTimeoutMs: number;
   startTimeoutMs: number;
 }
@@ -49,7 +53,8 @@ export async function runInit(command: InitCommand): Promise<number> {
 
 /** Asks for the proxy, probes it, and writes the config; throws when the person backs out */
 export async function initWizard(command: InitCommand): Promise<Config> {
-  const { system, probeTimeoutMs, startTimeoutMs } = command;
+  const { system, reporter } = command;
+  reporter.step("", (output) => clack.intro(bold("prx init"), { output }));
   const source = answerOrCancel(
     await system.prompt.select<"external" | "built-in">({
       message: "Proxy source",
@@ -61,10 +66,14 @@ export async function initWizard(command: InitCommand): Promise<Config> {
   );
 
   const proxy =
-    source === "external" ? await askExternalProxy(command) : await askBuiltInProxy(system);
+    source === "external" ? await askExternalProxy(command) : await askBuiltInProxy(command);
   const config: Config = { version: 1, proxy };
   await writeConfig(system, config);
-  system.writeStdout(`Saved config to ${configPath(system)}\n`);
+  const path = configPath(system);
+  reporter.step(`Saved config to ${path}\n`, (output) => {
+    const title = `Saved to ${pathLink(system.homeDir(), path)}`;
+    clack.note(table(summaryRows(system, proxy)).join("\n"), title, { output });
+  });
 
   // The config is already saved at this point, so backing out here only declines the start
   if (proxy.source === "built-in") {
@@ -73,21 +82,76 @@ export async function initWizard(command: InitCommand): Promise<Config> {
       initialValue: true,
     });
     if (startNow.kind === "answered" && startNow.value) {
-      const report = await bringUp(system, proxy, probeTimeoutMs, startTimeoutMs);
-      system.writeStdout(formatUpReport(system, report));
+      const report = await bringUp(command, proxy);
+      reporter.step(formatUpReport(system, report), (output) => {
+        const block = upBlock(system, report);
+        clack.log.message(block.lines, { symbol: block.mark, output });
+      });
     }
   }
 
-  system.writeStdout(formatPresetListing(await listPresets(system)));
+  const listing = await listPresets(system);
+  reporter.step(formatPresetListing(listing), (output) => {
+    clack.log.message(presetRows(listing), { output });
+    clack.outro(nextStep(listing), { output });
+  });
   return config;
 }
 
+function summaryLabel(text: string): Cell {
+  return { text, style: dim };
+}
+
+function summaryRows(
+  system: SystemAdapter,
+  proxy: BuiltInProxyConfig | ExternalProxyConfig,
+): Cell[][] {
+  if (proxy.source === "external") {
+    const rows: Cell[][] = [[summaryLabel("Source"), { text: "external" }]];
+    for (const type of ENDPOINT_TYPES) {
+      const address = proxy.endpoints[type];
+      if (address !== undefined) {
+        rows.push([
+          summaryLabel(ENDPOINT_LABELS[type]),
+          { text: `${address.host}:${address.port}` },
+        ]);
+      }
+    }
+    return rows;
+  }
+  const { tunnel } = proxy;
+  const rows: Cell[][] = [
+    [summaryLabel("Source"), { text: "built-in" }],
+    [summaryLabel("Tunnel"), { text: `${tunnel.user}@${tunnel.host}:${tunnel.port}` }],
+  ];
+  if (tunnel.identityFile !== undefined) {
+    rows.push([
+      summaryLabel("Identity"),
+      { text: tildePath(system.homeDir(), tunnel.identityFile) },
+    ]);
+  }
+  rows.push(
+    [summaryLabel("SOCKS"), { text: `127.0.0.1:${proxy.socksPort}` }],
+    [summaryLabel("HTTP"), { text: `127.0.0.1:${proxy.httpPort}` }],
+  );
+  return rows;
+}
+
+// The first installed preset is the natural next command; claude comes first in the listing
+function nextStep(listing: PresetListing[]): string {
+  const installed = listing.find((entry) => entry.found);
+  if (installed === undefined) {
+    return `Install Claude Code or Chrome, then ${cyan("prx run <preset>")}`;
+  }
+  return `Next: ${cyan(`prx run ${installed.name}`)}`;
+}
+
 // The dependency check comes first so a missing binary is reported before any typing
-async function askBuiltInProxy(system: SystemAdapter): Promise<BuiltInProxyConfig> {
-  await findDependencies(system);
-  const tunnel = await askTunnel(system);
-  const socksPort = await askFreePort(system, "SOCKS port", DEFAULT_SOCKS_PORT, () => undefined);
-  const httpPort = await askFreePort(system, "HTTP port", DEFAULT_HTTP_PORT, (port) =>
+async function askBuiltInProxy(command: InitCommand): Promise<BuiltInProxyConfig> {
+  await findDependencies(command.system);
+  const tunnel = await askTunnel(command.system);
+  const socksPort = await askFreePort(command, "SOCKS port", DEFAULT_SOCKS_PORT, () => undefined);
+  const httpPort = await askFreePort(command, "HTTP port", DEFAULT_HTTP_PORT, (port) =>
     port === socksPort ? "Must differ from the SOCKS port" : undefined,
   );
   return { source: "built-in", tunnel, socksPort, httpPort };
@@ -109,11 +173,12 @@ async function askTunnel(system: SystemAdapter): Promise<TunnelConfig> {
 // The port check needs the OS, which a validator cannot reach, so a busy port is reported
 // after the answer and the question is asked again
 async function askFreePort(
-  system: SystemAdapter,
+  command: InitCommand,
   message: string,
   initialValue: string,
   validate: (port: number) => string | undefined,
 ): Promise<number> {
+  const { system } = command;
   for (;;) {
     const input = await askText(system, message, initialValue, (candidate) => {
       const problem = requirePort(candidate);
@@ -123,8 +188,13 @@ async function askFreePort(
     if (await system.isPortFree(port)) {
       return port;
     }
-    system.writeStdout(`Port ${port} is already in use\n`);
+    warn(command, `Port ${port} is already in use`);
   }
+}
+
+// A problem found after an answer, outside any prompt's own validation
+function warn({ reporter }: InitCommand, text: string): void {
+  reporter.step(`${text}\n`, (output) => clack.log.warn(text, { output }));
 }
 
 async function askText(
@@ -161,14 +231,17 @@ function expandHome(system: SystemAdapter, path: string): string {
   return path;
 }
 
-async function askExternalProxy({
-  system,
-  probeTimeoutMs,
-}: InitCommand): Promise<ExternalProxyConfig> {
-  const proxy: ExternalProxyConfig = { source: "external", endpoints: await askEndpoints(system) };
+async function askExternalProxy(command: InitCommand): Promise<ExternalProxyConfig> {
+  const { system, reporter, probeTimeoutMs } = command;
+  const proxy: ExternalProxyConfig = { source: "external", endpoints: await askEndpoints(command) };
 
-  const reports = await probeEndpoints(proxy, probeTimeoutMs);
-  system.writeStdout(formatEndpointReports(reports));
+  const reports = await reporter.wait("Probing endpoints", () =>
+    probeEndpoints(proxy, probeTimeoutMs),
+  );
+  reporter.step(formatEndpointReports(reports), (output) => {
+    const mark = symbol(allLive(reports) ? "success" : "warn");
+    clack.log.message(table(endpointRows(reports)), { symbol: mark, output });
+  });
   if (!allLive(reports)) {
     const saveAnyway = answerOrCancel(
       await system.prompt.confirm({ message: "Save the config anyway?", initialValue: false }),
@@ -180,7 +253,8 @@ async function askExternalProxy({
   return proxy;
 }
 
-async function askEndpoints(system: SystemAdapter): Promise<ExternalProxyConfig["endpoints"]> {
+async function askEndpoints(command: InitCommand): Promise<ExternalProxyConfig["endpoints"]> {
+  const { system } = command;
   for (;;) {
     const endpoints: ExternalProxyConfig["endpoints"] = {};
     for (const type of ENDPOINT_TYPES) {
@@ -197,7 +271,7 @@ async function askEndpoints(system: SystemAdapter): Promise<ExternalProxyConfig[
     if (Object.keys(endpoints).length > 0) {
       return endpoints;
     }
-    system.writeStdout("Record at least one endpoint\n");
+    warn(command, "Record at least one endpoint");
   }
 }
 

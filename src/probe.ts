@@ -44,6 +44,8 @@ export async function probe(endpoint: Endpoint, options: ProbeOptions): Promise<
 export interface ProbeUntilLiveOptions extends ProbeOptions {
   /** How long to keep probing; each attempt still gets at most timeoutMs */
   waitMs: number;
+  /** Called after every attempt, live or not, so a person can watch the wait */
+  onAttempt?: (result: ProbeResult) => void;
 }
 
 /** Probes again and again until the endpoint is live or the wait has passed, reporting the last result */
@@ -58,6 +60,7 @@ export async function probeUntilLive(
       url: options.url,
       timeoutMs: Math.min(options.timeoutMs, remainingMs),
     });
+    options.onAttempt?.(result);
     if (result.live || deadline - performance.now() - RETRY_DELAY_MS < MIN_ATTEMPT_MS) {
       return result;
     }

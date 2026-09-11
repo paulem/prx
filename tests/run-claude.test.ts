@@ -109,7 +109,8 @@ describe("prx run claude", () => {
     expect(exitCode).toBe(1);
     expect(fake.spawns).toEqual([]);
     expect(fake.stderr()).toBe(
-      `Endpoint http://127.0.0.1:${closed.port} is not live: connection refused (ECONNREFUSED)\n`,
+      `Endpoint http://127.0.0.1:${closed.port} is not live: connection refused (ECONNREFUSED). ` +
+        "Run prx status to see every endpoint.\n",
     );
   });
 

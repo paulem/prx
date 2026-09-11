@@ -62,6 +62,15 @@ export interface SpawnOutcome {
   signal: NodeJS.Signals | null;
 }
 
+export type OutputStream = "stdout" | "stderr";
+
+/** A transient activity indicator on stderr, gone without a trace once cleared */
+export interface Spinner {
+  start: (message: string) => void;
+  message: (message: string) => void;
+  clear: () => void;
+}
+
 /**
  * The single seam between prx and the operating system. Every OS touchpoint
  * goes through here so tests can substitute it
@@ -69,6 +78,9 @@ export interface SpawnOutcome {
 export interface SystemAdapter {
   writeStdout: (text: string) => void;
   writeStderr: (text: string) => void;
+  /** Whether a stream may carry color, symbols and spinners: a terminal, and NO_COLOR unset */
+  decorates: (stream: OutputStream) => boolean;
+  spinner: () => Spinner;
   homeDir: () => string;
   /** The directory prx keeps its config in, honouring XDG_CONFIG_HOME */
   configDir: () => string;
@@ -108,6 +120,18 @@ export function createNodeSystemAdapter(env: NodeJS.ProcessEnv = process.env): S
     },
     writeStderr(text) {
       process.stderr.write(text);
+    },
+    decorates(stream) {
+      const noColor = env.NO_COLOR !== undefined && env.NO_COLOR !== "";
+      return process[stream].isTTY === true && !noColor;
+    },
+    spinner() {
+      const spinner = clack.spinner({ output: process.stderr, withGuide: false });
+      return {
+        start: (message) => spinner.start(message),
+        message: (message) => spinner.message(message),
+        clear: () => spinner.clear(),
+      };
     },
     homeDir: homedir,
     configDir() {

@@ -1,6 +1,7 @@
 import type { EndpointType } from "../config.ts";
-import type { Reporter } from "../output.ts";
+import type { Reporter, View } from "../output.ts";
 import { locateApp, presets } from "../presets/index.ts";
+import { bold, dim, symbolCell, table, type Cell } from "../style.ts";
 import type { SystemAdapter } from "../system.ts";
 
 export interface ListCommand {
@@ -37,8 +38,46 @@ export function formatPresetListing(listing: PresetListing[]): string {
     .join("");
 }
 
+/** A header row, then one row per preset marked installed or not, with the secondary facts dimmed */
+export function presetRows(listing: PresetListing[]): string[] {
+  const header: Cell[] = [
+    { text: " " },
+    { text: "Preset", style: dim },
+    { text: "Launch", style: dim },
+    { text: "Endpoints", style: dim },
+  ];
+  const rows = listing.map((entry): Cell[] => {
+    const endpoints = entry.endpoints.join(", ");
+    if (entry.found) {
+      return [
+        symbolCell("success"),
+        { text: entry.name, style: bold },
+        { text: entry.launch, style: dim },
+        { text: endpoints, style: dim },
+      ];
+    }
+    return [
+      symbolCell("muted"),
+      { text: entry.name, style: dim },
+      { text: entry.launch, style: dim },
+      { text: endpoints, style: dim },
+      { text: "not installed", style: dim },
+    ];
+  });
+  return table([header, ...rows]);
+}
+
+export function listView(listing: PresetListing[]): View {
+  return {
+    plain: formatPresetListing(listing),
+    decorated: presetRows(listing)
+      .map((row) => `${row}\n`)
+      .join(""),
+  };
+}
+
 export async function runList({ system, reporter }: ListCommand): Promise<number> {
   const listing = await listPresets(system);
-  reporter.result(formatPresetListing(listing), { presets: listing });
+  reporter.result(listView(listing), { presets: listing });
   return 0;
 }

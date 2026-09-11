@@ -2,6 +2,7 @@ import type { Address, BuiltInProxyConfig, EndpointType, ProxyConfig } from "../
 import type {
   BackgroundRequest,
   LaunchRequest,
+  OutputStream,
   PromptAnswer,
   SpawnOutcome,
   SpawnRequest,
@@ -30,10 +31,19 @@ export interface SentSignal {
   signal: NodeJS.Signals;
 }
 
+export interface SpinnerEvent {
+  kind: "start" | "message" | "clear";
+  message?: string;
+}
+
 export interface FakeSystem {
   system: SystemAdapter;
   stdout: () => string;
   stderr: () => string;
+  /** Streams the fake reports as decorated terminals; both plain unless a test says otherwise */
+  decorated: Set<OutputStream>;
+  /** Everything the CLI did with spinners, in order */
+  spinners: SpinnerEvent[];
   /** In-memory files keyed by absolute path */
   files: Map<string, string>;
   /** Paths the CLI asked to delete, in order */
@@ -92,6 +102,8 @@ export function createFakeSystem(): FakeSystem {
   const answers: ScriptedAnswer[] = [];
   const questions: AskedQuestion[] = [];
   const rejectedInputs: RejectedInput[] = [];
+  const decorated = new Set<OutputStream>();
+  const spinners: SpinnerEvent[] = [];
 
   function nextAnswer(): ScriptedAnswer {
     const answer = answers.shift();
@@ -109,6 +121,18 @@ export function createFakeSystem(): FakeSystem {
       writeStderr(text) {
         err.push(text);
       },
+      decorates: (stream) => decorated.has(stream),
+      spinner: () => ({
+        start: (message) => {
+          spinners.push({ kind: "start", message });
+        },
+        message: (message) => {
+          spinners.push({ kind: "message", message });
+        },
+        clear: () => {
+          spinners.push({ kind: "clear" });
+        },
+      }),
       homeDir: () => FAKE_HOME,
       configDir: () => `${FAKE_HOME}/.config/prx`,
       stateDir: () => FAKE_STATE_DIR,
@@ -196,6 +220,8 @@ export function createFakeSystem(): FakeSystem {
     },
     stdout: () => out.join(""),
     stderr: () => err.join(""),
+    decorated,
+    spinners,
     files,
     removed,
     onPath,

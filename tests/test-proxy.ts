@@ -177,3 +177,30 @@ function socks5Server(serveTarget: ((socket: Duplex) => void) | undefined): net.
     socket.on("data", onData);
   });
 }
+
+/** Test proxies a file opens, closed together after each test */
+export interface ProxyPool {
+  open: (mode: TestProxyMode, port?: number) => Promise<TestProxy>;
+  /** A port that was listening a moment ago and is closed now, so a probe is refused */
+  closed: () => Promise<TestProxy>;
+  closeAll: () => Promise<void>;
+}
+
+export function proxyPool(): ProxyPool {
+  const proxies: TestProxy[] = [];
+  return {
+    async open(mode, port) {
+      const proxy = await startTestProxy(mode, port);
+      proxies.push(proxy);
+      return proxy;
+    },
+    async closed() {
+      const proxy = await startTestProxy("live");
+      await proxy.close();
+      return proxy;
+    },
+    async closeAll() {
+      await Promise.all(proxies.splice(0).map((proxy) => proxy.close()));
+    },
+  };
+}

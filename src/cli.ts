@@ -13,6 +13,7 @@ import { ENDPOINT_TYPES, type EndpointType } from "./config.ts";
 import { PrxError } from "./errors.ts";
 import { createReporter, type Reporter } from "./output.ts";
 import { DEFAULT_PROBE_TIMEOUT_MS } from "./probe.ts";
+import { bold, cyan, green, yellow } from "./style.ts";
 import type { SystemAdapter } from "./system.ts";
 
 const USAGE_ERROR_EXIT_CODE = 2;
@@ -64,9 +65,22 @@ export async function runCli(
     .configureOutput({
       writeOut: system.writeStdout,
       writeErr: system.writeStderr,
+      getOutHasColors: () => system.decorates("stdout"),
+      getErrHasColors: () => system.decorates("stderr"),
     })
     .showHelpAfterError("(add --help for the list of commands)")
-    .enablePositionalOptions();
+    .enablePositionalOptions()
+    .addHelpText("after", `\n${helpExamples(system.decorates("stdout"))}`);
+
+  if (system.decorates("stdout")) {
+    program.configureHelp({
+      styleTitle: bold,
+      styleCommandText: cyan,
+      styleSubcommandTerm: cyan,
+      styleOptionTerm: green,
+      styleArgumentTerm: yellow,
+    });
+  }
 
   program
     .command("run")
@@ -105,7 +119,7 @@ export async function runCli(
     .description("Set up an external or built-in proxy interactively")
     .action(async () => {
       const reporter = createReporter(system, false);
-      await report(reporter, () => runInit({ system, probeTimeoutMs, startTimeoutMs }));
+      await report(reporter, () => runInit({ system, reporter, probeTimeoutMs, startTimeoutMs }));
     });
 
   program
@@ -159,7 +173,9 @@ export async function runCli(
     .option("--yes", "Remove without asking")
     .action(async (commandOptions: YesOption) => {
       const reporter = createReporter(system, false);
-      await report(reporter, () => runUninstall({ system, yes: commandOptions.yes === true }));
+      await report(reporter, () =>
+        runUninstall({ system, reporter, yes: commandOptions.yes === true }),
+      );
     });
 
   if (argv.length === 0) {
@@ -179,4 +195,21 @@ export async function runCli(
     }
     return USAGE_ERROR_EXIT_CODE;
   }
+}
+
+const EXAMPLES: [string, string][] = [
+  ["prx init", "set up a proxy"],
+  ["prx run claude", "launch Claude Code through it"],
+  ["prx run chrome --via socks", "launch Chrome on the SOCKS endpoint"],
+  ["prx status", "see whether the proxy is live"],
+];
+
+function helpExamples(decorated: boolean): string {
+  const width = Math.max(...EXAMPLES.map(([command]) => command.length));
+  const lines = EXAMPLES.map(([command, purpose]) => {
+    const padded = command.padEnd(width);
+    return `  ${decorated ? cyan(padded) : padded}  ${purpose}`;
+  });
+  const title = decorated ? bold("Examples:") : "Examples:";
+  return `${title}\n${lines.join("\n")}\n`;
 }
