@@ -18,4 +18,6 @@ export interface Preset {
   probeUrl?: string;
   /** Why a launch must be refused while the app is already running, for apps that ignore injection then */
   refuseWhenRunning?: string;
+  /** A page the app opens at launch as visible proof that it goes through the proxy */
+  landingUrl?: string;
 }

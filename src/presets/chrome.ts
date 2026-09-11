@@ -8,4 +8,5 @@ export const chrome: Preset = {
   launch: "detached",
   refuseWhenRunning:
     "Chrome ignores proxy flags when an instance exists, so quit it and run again.",
+  landingUrl: "https://api.ipify.org",
 };

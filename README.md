@@ -175,7 +175,7 @@ An attached launch of Claude Code with `HTTP_PROXY`, `HTTPS_PROXY`, and their lo
 
 ### chrome
 
-Launches a new Chrome instance through the macOS `open` command with `--proxy-server=<endpoint URL>` as an argument, followed by any passthrough arguments. The URL is `socks5://host:port` for a SOCKS endpoint, which Chrome prefers when the proxy has one, and `http://host:port` otherwise; with `socks5://` Chrome resolves DNS on the proxy side. Chrome keeps your normal profile. The launch is detached, so prx returns immediately and does not capture Chrome's output.
+Launches a new Chrome instance through the macOS `open` command with `--proxy-server=<endpoint URL>` as an argument, followed by any passthrough arguments and then `https://api.ipify.org` as a landing page. The URL is `socks5://host:port` for a SOCKS endpoint, which Chrome prefers when the proxy has one, and `http://host:port` otherwise; with `socks5://` Chrome resolves DNS on the proxy side. The landing page opens as a tab showing the address the proxy exits from, so a glance tells this window apart from an unproxied Chrome; Chrome itself gives no visible sign that a proxy flag is in effect. Chrome keeps your normal profile. The launch is detached, so prx returns immediately and does not capture Chrome's output.
 
 **Chrome must not already be running.** Chrome ignores proxy flags when an instance already exists: the flag would be silently dropped and you would get an unproxied window that looks proxied. prx checks for a running instance before launching and refuses with exit code 3 and an explanation. Quit Chrome and run again.
 

@@ -93,6 +93,7 @@ describe("prx run with a stopped built-in proxy", () => {
     expect(fake.backgroundStarts).toHaveLength(2);
     expect(fake.launches[0]?.args.slice(4)).toEqual([
       `--proxy-server=socks5://127.0.0.1:${endpoints.socks.port}`,
+      "https://api.ipify.org",
     ]);
     expect(fake.stderr()).toMatch(/^prx: started the built-in proxy\nprx: socks endpoint /);
   });

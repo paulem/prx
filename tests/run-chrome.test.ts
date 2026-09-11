@@ -9,6 +9,7 @@ import {
 import { startTestProxy, trustProbeTarget, type TestProxy } from "./test-proxy.ts";
 
 const CHROME_PATH = "/Applications/Google Chrome.app";
+const LANDING_URL = "https://api.ipify.org";
 
 beforeAll(() => {
   trustProbeTarget();
@@ -55,7 +56,14 @@ describe("prx run chrome", () => {
     expect(fake.launches).toEqual([
       {
         command: "open",
-        args: ["-n", "-a", CHROME_PATH, "--args", `--proxy-server=http://127.0.0.1:${proxy?.port}`],
+        args: [
+          "-n",
+          "-a",
+          CHROME_PATH,
+          "--args",
+          `--proxy-server=http://127.0.0.1:${proxy?.port}`,
+          LANDING_URL,
+        ],
       },
     ]);
     expect(fake.spawns).toEqual([]);
@@ -74,6 +82,7 @@ describe("prx run chrome", () => {
     expect(exitCode).toBe(0);
     expect(fake.launches[0]?.args.slice(4)).toEqual([
       `--proxy-server=socks5://127.0.0.1:${socks?.port}`,
+      LANDING_URL,
     ]);
     expect(fake.stderr()).toMatch(
       /^prx: socks endpoint socks5:\/\/127\.0\.0\.1:\d+ is live \(\d+ ms\), launching chrome\n$/,
@@ -101,6 +110,7 @@ describe("prx run chrome", () => {
     expect(exitCode).toBe(0);
     expect(fake.launches[0]?.args.slice(4)).toEqual([
       `--proxy-server=http://127.0.0.1:${proxy?.port}`,
+      LANDING_URL,
     ]);
   });
 
@@ -129,7 +139,7 @@ describe("prx run chrome", () => {
     expect(fake.stderr()).toMatch(/--via/);
   });
 
-  test("passthrough arguments follow the injected flag", async () => {
+  test("passthrough arguments follow the injected flag, before the landing page", async () => {
     const fake = await withLiveProxy();
 
     await runCli(["run", "chrome", "--incognito", "https://example.com"], fake.system);
@@ -138,6 +148,7 @@ describe("prx run chrome", () => {
       `--proxy-server=http://127.0.0.1:${proxy?.port}`,
       "--incognito",
       "https://example.com",
+      LANDING_URL,
     ]);
   });
 

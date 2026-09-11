@@ -78,16 +78,14 @@ export async function runRun(command: RunCommand): Promise<number> {
   }
 
   const injected = inject(preset, endpoint);
+  const landing = preset.landingUrl === undefined ? [] : [preset.landingUrl];
+  const args = [...injected.args, ...passthrough, ...landing];
   if (preset.launch === "detached") {
-    await system.launchDetached(macOpenLaunch(appPath, [...injected.args, ...passthrough]));
+    await system.launchDetached(macOpenLaunch(appPath, args));
     return 0;
   }
 
-  const outcome = await system.spawnAttached({
-    command: appPath,
-    args: [...injected.args, ...passthrough],
-    env: injected.env,
-  });
+  const outcome = await system.spawnAttached({ command: appPath, args, env: injected.env });
   return exitCodeFromOutcome(outcome);
 }
 
