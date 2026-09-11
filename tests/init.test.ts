@@ -497,6 +497,28 @@ describe("prx init with a built-in proxy", () => {
     );
   });
 
+  test("cancelling the start prompt keeps the saved config and starts nothing", async () => {
+    const fake = withDependencies();
+    fake.answers.push(
+      "built-in",
+      "me",
+      "box.example",
+      USE_DEFAULT,
+      USE_DEFAULT,
+      USE_DEFAULT,
+      USE_DEFAULT,
+      CANCEL,
+    );
+
+    const exitCode = await runCli(["init"], fake.system);
+
+    expect(exitCode).toBe(0);
+    expect(savedConfig(fake)).toMatchObject({ proxy: { source: "built-in" } });
+    expect(fake.backgroundStarts).toEqual([]);
+    expect(fake.stderr()).toBe("");
+    expect(fake.stdout()).toMatch(/^Saved config to .*\nclaude  missing/);
+  });
+
   test("cancelling a tunnel question saves nothing", async () => {
     const fake = withDependencies();
     fake.answers.push("built-in", "me", CANCEL);

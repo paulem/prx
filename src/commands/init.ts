@@ -65,11 +65,13 @@ export async function initWizard(command: InitCommand): Promise<Config> {
   await writeConfig(system, config);
   system.writeStdout(`Saved config to ${configPath(system)}\n`);
 
+  // The config is already saved at this point, so backing out here only declines the start
   if (proxy.source === "built-in") {
-    const startNow = answerOrCancel(
-      await system.prompt.confirm({ message: "Start the built-in proxy now?", initialValue: true }),
-    );
-    if (startNow) {
+    const startNow = await system.prompt.confirm({
+      message: "Start the built-in proxy now?",
+      initialValue: true,
+    });
+    if (startNow.kind === "answered" && startNow.value) {
       system.writeStdout(formatUpReport(system, await bringUp(system, proxy, probeTimeoutMs)));
     }
   }
