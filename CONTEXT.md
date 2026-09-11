@@ -5,12 +5,32 @@ A macOS command-line launcher that starts one app at a time through a configured
 ## Language
 
 **Proxy**:
-The single configured endpoint, a host and port, that an app's network traffic is routed through.
-_Avoid_: tunnel, upstream, server
+What prx routes apps through. It has one or more endpoints and exactly one source, external or built-in.
+_Avoid_: upstream, server
 
-**Proxy type**:
-The kind of proxy recorded in the config, which decides how prx reaches it. Only `http` exists today.
-_Avoid_: proxy kind, backend, provider
+**Endpoint**:
+A host, port and endpoint type that an app's traffic is routed through. A proxy exposes one endpoint per type.
+_Avoid_: address, listener, port
+
+**Endpoint type**:
+The protocol an endpoint speaks, `http` or `socks`, which decides how prx and apps reach it.
+_Avoid_: proxy type, proxy kind, backend, provider, scheme
+
+**External proxy**:
+A proxy someone else runs. prx only records its endpoints and never starts or stops it.
+_Avoid_: manual proxy, remote proxy, user proxy
+
+**Built-in proxy**:
+A proxy prx runs itself, as a tunnel with an HTTP endpoint layered in front of the tunnel's SOCKS endpoint.
+_Avoid_: managed proxy, internal proxy, local proxy, daemon
+
+**Tunnel**:
+The ssh connection the built-in proxy keeps open to a remote machine, which exposes the SOCKS endpoint.
+_Avoid_: ssh session, dynamic forward, socks server
+
+**Running**:
+The state of a built-in proxy whose processes exist. Running says nothing about whether an endpoint is live.
+_Avoid_: started, up, active, alive
 
 **App**:
 A program that prx launches on the user's behalf, such as Claude Code or Chrome. "Child process" is used only for the literal OS process of an attached launch.
@@ -21,15 +41,15 @@ A built-in description of how to launch one app through the proxy: where the app
 _Avoid_: profile, app config, launcher
 
 **Probe**:
-A single HTTPS request sent through the proxy to decide whether it is live.
+A single HTTPS request sent through an endpoint to decide whether it is live.
 _Avoid_: health check, ping, liveness check, connectivity test
 
 **Live**:
-The state of a proxy whose probe succeeded within the timeout.
+The state of an endpoint whose probe succeeded within the timeout.
 _Avoid_: up, healthy, reachable, working
 
 **Injection**:
-The way the proxy address is handed to an app: environment variables or command-line arguments.
+The way an endpoint is handed to an app: environment variables or command-line arguments.
 _Avoid_: proxy mode, method, strategy
 
 **Attached launch**:
