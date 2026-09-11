@@ -1,6 +1,7 @@
 import * as clack from "@clack/prompts";
 import { execFile, spawn } from "node:child_process";
-import { access, constants, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, constants, mkdir, open, readFile, rm, stat, writeFile } from "node:fs/promises";
+import net from "node:net";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 
@@ -47,6 +48,15 @@ export interface LaunchRequest {
   args: string[];
 }
 
+export interface BackgroundRequest {
+  command: string;
+  args: string[];
+  /** Variables added on top of prx's own environment */
+  env: Record<string, string>;
+  /** Where the process's stdout and stderr are appended */
+  logPath: string;
+}
+
 export interface SpawnOutcome {
   exitCode: number | null;
   signal: NodeJS.Signals | null;
@@ -62,6 +72,8 @@ export interface SystemAdapter {
   homeDir: () => string;
   /** The directory prx keeps its config in, honouring XDG_CONFIG_HOME */
   configDir: () => string;
+  /** The directory prx keeps pid files, generated configs and logs in, honouring XDG_STATE_HOME */
+  stateDir: () => string;
   pathExists: (path: string) => Promise<boolean>;
   /** Deletes a file or a whole directory; a missing path is not an error */
   remove: (path: string) => Promise<void>;
@@ -79,6 +91,13 @@ export interface SystemAdapter {
   launchDetached: (request: LaunchRequest) => Promise<void>;
   /** Whether an app from an Applications folder has a running instance */
   isApplicationRunning: (name: string) => Promise<boolean>;
+  /** Starts a process that outlives prx, with its output going to the log file, and resolves to its pid */
+  startBackground: (request: BackgroundRequest) => Promise<number>;
+  isProcessAlive: (pid: number) => Promise<boolean>;
+  /** Sends a signal; a process that is already gone is not an error */
+  signalProcess: (pid: number, signal: NodeJS.Signals) => Promise<void>;
+  /** Whether nothing listens on the port on 127.0.0.1 */
+  isPortFree: (port: number) => Promise<boolean>;
   prompt: Prompter;
 }
 
@@ -93,6 +112,10 @@ export function createNodeSystemAdapter(env: NodeJS.ProcessEnv = process.env): S
     homeDir: homedir,
     configDir() {
       const base = env.XDG_CONFIG_HOME || join(homedir(), ".config");
+      return join(base, "prx");
+    },
+    stateDir() {
+      const base = env.XDG_STATE_HOME || join(homedir(), ".local", "state");
       return join(base, "prx");
     },
     pathExists,
@@ -160,6 +183,57 @@ export function createNodeSystemAdapter(env: NodeJS.ProcessEnv = process.env): S
         });
       });
     },
+    async startBackground(request) {
+      await mkdir(dirname(request.logPath), { recursive: true });
+      const log = await open(request.logPath, "a");
+      try {
+        return await new Promise<number>((resolve, reject) => {
+          const child = spawn(request.command, request.args, {
+            detached: true,
+            stdio: ["ignore", log.fd, log.fd],
+            env: { ...env, ...request.env },
+          });
+          child.on("error", reject);
+          child.on("spawn", () => {
+            child.unref();
+            resolve(child.pid as number);
+          });
+        });
+      } finally {
+        await log.close();
+      }
+    },
+    async isProcessAlive(pid) {
+      // Signal 0 checks for the process without touching it; EPERM means it exists but is not ours
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch (error) {
+        return isErrorWithCode(error, "EPERM");
+      }
+    },
+    async signalProcess(pid, signal) {
+      try {
+        process.kill(pid, signal);
+      } catch (error) {
+        if (!isErrorWithCode(error, "ESRCH")) {
+          throw error;
+        }
+      }
+    },
+    isPortFree(port) {
+      return new Promise((resolve, reject) => {
+        const server = net.createServer();
+        server.once("error", (error) => {
+          if (isErrorWithCode(error, "EADDRINUSE")) {
+            resolve(false);
+          } else {
+            reject(error);
+          }
+        });
+        server.listen(port, "127.0.0.1", () => server.close(() => resolve(true)));
+      });
+    },
     prompt: {
       async select<T extends string>(question: SelectQuestion<T>) {
         // clack types options through a conditional on the value type, which a generic cannot satisfy
@@ -223,7 +297,9 @@ async function pathExists(path: string): Promise<boolean> {
 }
 
 function isMissingFile(error: unknown): boolean {
-  return (
-    typeof error === "object" && error !== null && (error as { code?: unknown }).code === "ENOENT"
-  );
+  return isErrorWithCode(error, "ENOENT");
+}
+
+function isErrorWithCode(error: unknown, code: string): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === code;
 }

@@ -1,10 +1,12 @@
 import { Command, CommanderError, Option } from "commander";
 import pkg from "../package.json" with { type: "json" };
 import { runConfig } from "./commands/config.ts";
+import { runDown } from "./commands/down.ts";
 import { runInit } from "./commands/init.ts";
 import { runList } from "./commands/list.ts";
 import { runRun } from "./commands/run.ts";
 import { runStatus } from "./commands/status.ts";
+import { runUp } from "./commands/up.ts";
 import { runUninstall } from "./commands/uninstall.ts";
 import { ENDPOINT_TYPES, type EndpointType } from "./config.ts";
 import { PrxError } from "./errors.ts";
@@ -103,8 +105,26 @@ export async function runCli(
     });
 
   program
+    .command("up")
+    .description("Start the built-in proxy in the background and wait for its endpoints")
+    .option("--json", "Print the result as one JSON object")
+    .action(async (commandOptions: JsonOption) => {
+      const reporter = createReporter(system, commandOptions.json === true);
+      await report(reporter, () => runUp({ system, reporter, probeTimeoutMs }));
+    });
+
+  program
+    .command("down")
+    .description("Stop the built-in proxy")
+    .option("--json", "Print the result as one JSON object")
+    .action(async (commandOptions: JsonOption) => {
+      const reporter = createReporter(system, commandOptions.json === true);
+      await report(reporter, () => runDown({ system, reporter }));
+    });
+
+  program
     .command("status")
-    .description("Probe each endpoint of the proxy and report whether it is live")
+    .description("Report whether the built-in proxy is running and whether each endpoint is live")
     .option("--json", "Print the result as one JSON object")
     .action(async (commandOptions: JsonOption) => {
       const reporter = createReporter(system, commandOptions.json === true);

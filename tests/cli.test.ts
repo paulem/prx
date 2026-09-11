@@ -16,7 +16,7 @@ describe("prx", () => {
 });
 
 describe("prx help", () => {
-  const plannedCommands = ["run", "init", "status", "list", "config", "uninstall"];
+  const plannedCommands = ["run", "init", "up", "down", "status", "list", "config", "uninstall"];
 
   test("--help lists the planned commands on stdout", async () => {
     const fake = createFakeSystem();

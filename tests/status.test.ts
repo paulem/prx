@@ -1,8 +1,10 @@
 import { afterEach, beforeAll, describe, expect, test } from "vitest";
 import { runCli } from "../src/cli.ts";
 import {
+  builtInProxy,
   createFakeSystem,
   externalProxy,
+  FAKE_STATE_DIR,
   writeFakeConfig,
   type FakeSystem,
 } from "./fake-system.ts";
@@ -152,6 +154,89 @@ describe("prx status on an external proxy", () => {
     expect(JSON.parse(fake.stdout()).endpoints.http).toMatchObject({
       live: false,
       reason: "timed_out",
+    });
+  });
+});
+
+/** Makes the fake's built-in proxy running: both pid files exist and both pids are alive */
+function markRunning(fake: FakeSystem): void {
+  fake.files.set(`${FAKE_STATE_DIR}/autossh.pid`, "1001\n");
+  fake.files.set(`${FAKE_STATE_DIR}/privoxy.pid`, "1002\n");
+  fake.alivePids.add(1001);
+  fake.alivePids.add(1002);
+}
+
+describe("prx status on a built-in proxy", () => {
+  test("prints the running state before the endpoint lines", async () => {
+    const http = await testProxy("live");
+    const socks = await testProxy("socks");
+    const fake = createFakeSystem();
+    writeFakeConfig(fake, builtInProxy({ socksPort: socks.port, httpPort: http.port }));
+    markRunning(fake);
+
+    const exitCode = await statusOf(fake);
+
+    expect(exitCode).toBe(0);
+    expect(fake.stdout()).toMatch(
+      new RegExp(
+        "^Built-in proxy is running\n" +
+          `Endpoint http://127\\.0\\.0\\.1:${http.port} is live \\(\\d+ ms\\)\n` +
+          `Endpoint socks5://127\\.0\\.0\\.1:${socks.port} is live \\(\\d+ ms\\)\n$`,
+      ),
+    );
+  });
+
+  test("names the log directory when running but not live", async () => {
+    const http = await closedPort();
+    const socks = await closedPort();
+    const fake = createFakeSystem();
+    writeFakeConfig(fake, builtInProxy({ socksPort: socks.port, httpPort: http.port }));
+    markRunning(fake);
+
+    const exitCode = await statusOf(fake);
+
+    expect(exitCode).toBe(1);
+    expect(fake.stdout()).toBe(
+      "Built-in proxy is running\n" +
+        `Endpoint http://127.0.0.1:${http.port} is not live: connection refused (ECONNREFUSED)\n` +
+        `Endpoint socks5://127.0.0.1:${socks.port} is not live: connection refused (ECONNREFUSED)\n` +
+        `Logs are in ${FAKE_STATE_DIR}\n`,
+    );
+  });
+
+  test("a stopped proxy is reported as not running without a log hint", async () => {
+    const http = await closedPort();
+    const socks = await closedPort();
+    const fake = createFakeSystem();
+    writeFakeConfig(fake, builtInProxy({ socksPort: socks.port, httpPort: http.port }));
+
+    const exitCode = await statusOf(fake);
+
+    expect(exitCode).toBe(1);
+    expect(fake.stdout()).toBe(
+      "Built-in proxy is not running\n" +
+        `Endpoint http://127.0.0.1:${http.port} is not live: connection refused (ECONNREFUSED)\n` +
+        `Endpoint socks5://127.0.0.1:${socks.port} is not live: connection refused (ECONNREFUSED)\n`,
+    );
+  });
+
+  test("--json gains running", async () => {
+    const http = await testProxy("live");
+    const socks = await testProxy("socks");
+    const fake = createFakeSystem();
+    writeFakeConfig(fake, builtInProxy({ socksPort: socks.port, httpPort: http.port }));
+    markRunning(fake);
+
+    const exitCode = await statusOf(fake, ["--json"]);
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(fake.stdout())).toEqual({
+      source: "built-in",
+      running: true,
+      endpoints: {
+        http: { host: "127.0.0.1", port: http.port, live: true, latencyMs: expect.any(Number) },
+        socks: { host: "127.0.0.1", port: socks.port, live: true, latencyMs: expect.any(Number) },
+      },
     });
   });
 });

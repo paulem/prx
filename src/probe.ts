@@ -5,6 +5,8 @@ import { endpointUrl, type Endpoint } from "./config.ts";
 export const DEFAULT_PROBE_URL = "https://example.com/";
 export const DEFAULT_PROBE_TIMEOUT_MS = 5000;
 const RETRY_DELAY_MS = 250;
+// A last attempt shorter than this would report a timeout instead of the real failure
+const MIN_ATTEMPT_MS = 500;
 
 export type ProbeFailureReason = "refused" | "rejected" | "timed_out" | "failed";
 
@@ -46,13 +48,12 @@ export async function probeUntilLive(
 ): Promise<ProbeResult> {
   const deadline = performance.now() + options.timeoutMs;
   for (;;) {
-    const remainingMs = Math.max(1, Math.ceil(deadline - performance.now()));
+    const remainingMs = Math.ceil(deadline - performance.now());
     const result = await probe(endpoint, { url: options.url, timeoutMs: remainingMs });
-    const leftMs = deadline - performance.now();
-    if (result.live || leftMs <= 0) {
+    if (result.live || deadline - performance.now() - RETRY_DELAY_MS < MIN_ATTEMPT_MS) {
       return result;
     }
-    await sleep(Math.min(RETRY_DELAY_MS, leftMs));
+    await sleep(RETRY_DELAY_MS);
   }
 }
 

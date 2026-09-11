@@ -1,5 +1,6 @@
-import type { Address, EndpointType, ProxyConfig } from "../src/config.ts";
+import type { Address, BuiltInProxyConfig, EndpointType, ProxyConfig } from "../src/config.ts";
 import type {
+  BackgroundRequest,
   LaunchRequest,
   PromptAnswer,
   SpawnOutcome,
@@ -24,6 +25,11 @@ export interface RejectedInput {
   message: string;
 }
 
+export interface SentSignal {
+  pid: number;
+  signal: NodeJS.Signals;
+}
+
 export interface FakeSystem {
   system: SystemAdapter;
   stdout: () => string;
@@ -44,6 +50,14 @@ export interface FakeSystem {
   launches: LaunchRequest[];
   /** Apps the fake reports as having a running instance */
   running: Set<string>;
+  /** Every background process the CLI started, in order; each gets the next pid from 1001 */
+  backgroundStarts: BackgroundRequest[];
+  /** Pids the fake reports as alive; a started process is alive until it is signalled */
+  alivePids: Set<number>;
+  /** Every signal the CLI sent, in order */
+  signals: SentSignal[];
+  /** Ports the fake reports as already in use on 127.0.0.1 */
+  busyPorts: Set<number>;
   /** Answers handed to prompts in order; a text prompt consumes one per attempt */
   answers: ScriptedAnswer[];
   /** Every prompt the CLI asked, in order */
@@ -54,6 +68,8 @@ export interface FakeSystem {
 
 export const FAKE_HOME = "/home/test";
 export const FAKE_CONFIG_PATH = `${FAKE_HOME}/.config/prx/config.json`;
+export const FAKE_STATE_DIR = `${FAKE_HOME}/.local/state/prx`;
+const FIRST_PID = 1001;
 
 function answered<T>(value: T): PromptAnswer<T> {
   return { kind: "answered", value };
@@ -69,6 +85,10 @@ export function createFakeSystem(): FakeSystem {
   const spawns: SpawnRequest[] = [];
   const launches: LaunchRequest[] = [];
   const running = new Set<string>();
+  const backgroundStarts: BackgroundRequest[] = [];
+  const alivePids = new Set<number>();
+  const signals: SentSignal[] = [];
+  const busyPorts = new Set<number>();
   const answers: ScriptedAnswer[] = [];
   const questions: AskedQuestion[] = [];
   const rejectedInputs: RejectedInput[] = [];
@@ -91,6 +111,7 @@ export function createFakeSystem(): FakeSystem {
       },
       homeDir: () => FAKE_HOME,
       configDir: () => `${FAKE_HOME}/.config/prx`,
+      stateDir: () => FAKE_STATE_DIR,
       pathExists: async (path) =>
         files.has(path) || [...files.keys()].some((file) => file.startsWith(`${path}/`)),
       remove: async (path) => {
@@ -115,6 +136,18 @@ export function createFakeSystem(): FakeSystem {
         launches.push(request);
       },
       isApplicationRunning: async (name) => running.has(name),
+      startBackground: async (request) => {
+        backgroundStarts.push(request);
+        const pid = FIRST_PID + backgroundStarts.length - 1;
+        alivePids.add(pid);
+        return pid;
+      },
+      isProcessAlive: async (pid) => alivePids.has(pid),
+      signalProcess: async (pid, signal) => {
+        signals.push({ pid, signal });
+        alivePids.delete(pid);
+      },
+      isPortFree: async (port) => !busyPorts.has(port),
       prompt: {
         async select(question) {
           questions.push({ kind: "select", message: question.message, options: question.options });
@@ -171,6 +204,10 @@ export function createFakeSystem(): FakeSystem {
     spawnOutcome: { exitCode: 0, signal: null },
     launches,
     running,
+    backgroundStarts,
+    alivePids,
+    signals,
+    busyPorts,
     answers,
     questions,
     rejectedInputs,
@@ -189,5 +226,16 @@ export function externalProxy(endpoints: Partial<Record<EndpointType, Address>>)
     endpoints: Object.fromEntries(
       Object.entries(endpoints).map(([type, { host, port }]) => [type, { host, port }]),
     ),
+  };
+}
+
+/** A built-in proxy with a plain tunnel and the default ports, unless overridden */
+export function builtInProxy(overrides: Partial<BuiltInProxyConfig> = {}): BuiltInProxyConfig {
+  return {
+    source: "built-in",
+    tunnel: { user: "me", host: "box.example", port: 22 },
+    socksPort: 1080,
+    httpPort: 8118,
+    ...overrides,
   };
 }

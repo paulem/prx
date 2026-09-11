@@ -1,3 +1,4 @@
+import { stopBuiltInProxy } from "../builtin-proxy.ts";
 import { hasPathBlock, installedBinaryPath, removePathBlock, zshrcPath } from "../install.ts";
 import type { SystemAdapter } from "../system.ts";
 
@@ -42,11 +43,13 @@ async function plannedRemovals(system: SystemAdapter): Promise<Removal[]> {
   const home = system.homeDir();
   const binary = installedBinaryPath(home);
   const configDir = system.configDir();
+  const stateDir = system.stateDir();
   const zshrc = zshrcPath(home);
 
-  const [binaryExists, configDirExists, zshrcText] = await Promise.all([
+  const [binaryExists, configDirExists, stateDirExists, zshrcText] = await Promise.all([
     system.pathExists(binary),
     system.pathExists(configDir),
+    system.pathExists(stateDir),
     system.readTextFile(zshrc),
   ]);
 
@@ -56,6 +59,16 @@ async function plannedRemovals(system: SystemAdapter): Promise<Removal[]> {
   }
   if (configDirExists) {
     removals.push({ label: configDir, remove: () => system.remove(configDir) });
+  }
+  if (stateDirExists) {
+    // Nothing prx started may outlive it, so the proxy is stopped before its state goes
+    removals.push({
+      label: stateDir,
+      remove: async () => {
+        await stopBuiltInProxy(system);
+        await system.remove(stateDir);
+      },
+    });
   }
   if (zshrcText !== undefined && hasPathBlock(zshrcText)) {
     removals.push({

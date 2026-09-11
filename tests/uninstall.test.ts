@@ -1,10 +1,12 @@
 import { describe, expect, test } from "vitest";
 import { runCli } from "../src/cli.ts";
 import {
+  builtInProxy,
   CANCEL,
   createFakeSystem,
   externalProxy,
   FAKE_CONFIG_PATH,
+  FAKE_STATE_DIR,
   writeFakeConfig,
   type FakeSystem,
 } from "./fake-system.ts";
@@ -117,6 +119,48 @@ describe("prx uninstall", () => {
     expect(fake.stdout()).toBe(
       "prx uninstall will remove:\n  /home/test/.config/prx\nRemoved /home/test/.config/prx\n",
     );
+  });
+
+  test("stops a running built-in proxy and removes the state directory", async () => {
+    const fake = installedFake();
+    writeFakeConfig(fake, builtInProxy());
+    fake.files.set(`${FAKE_STATE_DIR}/autossh.pid`, "1001\n");
+    fake.files.set(`${FAKE_STATE_DIR}/privoxy.pid`, "1002\n");
+    fake.files.set(`${FAKE_STATE_DIR}/privoxy.conf`, "listen-address 127.0.0.1:8118\n");
+    fake.alivePids.add(1001);
+    fake.alivePids.add(1002);
+
+    const exitCode = await runCli(["uninstall", "--yes"], fake.system);
+
+    expect(exitCode).toBe(0);
+    expect(fake.stdout()).toBe(
+      "prx uninstall will remove:\n" +
+        `  ${BINARY}\n` +
+        "  /home/test/.config/prx\n" +
+        `  ${FAKE_STATE_DIR}\n` +
+        `  the prx PATH block in ${ZSHRC}\n` +
+        `Removed ${BINARY}\n` +
+        "Removed /home/test/.config/prx\n" +
+        `Removed ${FAKE_STATE_DIR}\n` +
+        `Removed the prx PATH block in ${ZSHRC}\n`,
+    );
+    expect(fake.signals).toEqual([
+      { pid: 1001, signal: "SIGTERM" },
+      { pid: 1002, signal: "SIGTERM" },
+    ]);
+    expect(fake.removed).toContain(FAKE_STATE_DIR);
+    expect([...fake.files.keys()].some((file) => file.startsWith(FAKE_STATE_DIR))).toBe(false);
+  });
+
+  test("removes a state directory left by a stopped proxy without signalling anything", async () => {
+    const fake = createFakeSystem();
+    fake.files.set(`${FAKE_STATE_DIR}/autossh.log`, "");
+
+    const exitCode = await runCli(["uninstall", "--yes"], fake.system);
+
+    expect(exitCode).toBe(0);
+    expect(fake.signals).toEqual([]);
+    expect(fake.removed).toEqual([FAKE_STATE_DIR]);
   });
 
   test("says so when there is nothing to remove", async () => {

@@ -1,3 +1,4 @@
+import { isBuiltInProxyRunning } from "../builtin-proxy.ts";
 import {
   endpointUrl,
   proxyEndpoints,
@@ -26,12 +27,38 @@ export async function runStatus({
   probeTimeoutMs,
 }: StatusCommand): Promise<number> {
   const config = await readConfig(system);
-  const reports = await probeEndpoints(config.proxy, probeTimeoutMs);
-  reporter.result(formatEndpointReports(reports), {
-    source: config.proxy.source,
+  const { proxy } = config;
+  if (proxy.source === "external") {
+    const reports = await probeEndpoints(proxy, probeTimeoutMs);
+    reporter.result(formatEndpointReports(reports), {
+      source: "external",
+      endpoints: endpointReportsJson(reports),
+    });
+    return allLive(reports) ? 0 : 1;
+  }
+
+  const [running, reports] = await Promise.all([
+    isBuiltInProxyRunning(system),
+    probeEndpoints(proxy, probeTimeoutMs),
+  ]);
+  const headline = running ? "Built-in proxy is running" : "Built-in proxy is not running";
+  reporter.result(formatBuiltInReport(system, headline, running, reports), {
+    source: "built-in",
+    running,
     endpoints: endpointReportsJson(reports),
   });
   return allLive(reports) ? 0 : 1;
+}
+
+/** The running line, one line per endpoint, and where to look when running but not live */
+export function formatBuiltInReport(
+  system: SystemAdapter,
+  headline: string,
+  running: boolean,
+  reports: EndpointReport[],
+): string {
+  const logHint = running && !allLive(reports) ? `Logs are in ${system.stateDir()}\n` : "";
+  return `${headline}\n${formatEndpointReports(reports)}${logHint}`;
 }
 
 /** Probes every endpoint of the proxy at once with the default probe URL */

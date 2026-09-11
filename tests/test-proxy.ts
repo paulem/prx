@@ -31,7 +31,8 @@ export function trustProbeTarget(): void {
   tls.setDefaultCACertificates([probeTargetCert]);
 }
 
-export function startTestProxy(mode: TestProxyMode): Promise<TestProxy> {
+/** Starts a proxy on an ephemeral port, or on the given port for an endpoint that must come up late */
+export function startTestProxy(mode: TestProxyMode, port = 0): Promise<TestProxy> {
   const sockets = new Set<net.Socket>();
   const target = http.createServer((_request, response) => {
     response.writeHead(204);
@@ -58,7 +59,7 @@ export function startTestProxy(mode: TestProxyMode): Promise<TestProxy> {
   });
 
   return new Promise((resolve) => {
-    proxy.listen(0, "127.0.0.1", () => {
+    proxy.listen(port, "127.0.0.1", () => {
       const address = proxy.address();
       if (address === null || typeof address === "string") {
         throw new Error("test proxy did not bind to a TCP port");

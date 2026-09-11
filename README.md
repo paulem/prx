@@ -2,7 +2,7 @@
 
 A macOS command-line launcher that starts one app at a time through a configured proxy, so a system-wide proxy is never needed.
 
-prx remembers one proxy, which exposes an HTTP endpoint, a SOCKS endpoint, or both. For each supported app it knows how to inject an endpoint at launch. `prx run claude` probes the endpoint, refuses to continue if it is not live, and otherwise launches Claude Code with the endpoint injected. Chrome works the same way through its own preset. Everything else on the Mac keeps talking to the network directly.
+prx remembers one proxy, which exposes an HTTP endpoint, a SOCKS endpoint, or both. The proxy is either external, something else runs it and prx only records its endpoints, or built-in, an ssh tunnel with an HTTP endpoint in front of it that prx starts and stops itself. For each supported app prx knows how to inject an endpoint at launch. `prx run claude` probes the endpoint, refuses to continue if it is not live, and otherwise launches Claude Code with the endpoint injected. Chrome works the same way through its own preset. Everything else on the Mac keeps talking to the network directly.
 
 ## Install
 
@@ -21,6 +21,8 @@ The script builds a single bundled file, copies it to `~/.local/bin/prx`, and ad
 ```
 prx run [--no-check] [--via <type>] [--json] <preset> [passthrough...]
 prx init
+prx up [--json]
+prx down [--json]
 prx status [--json]
 prx list [--json]
 prx config [--json]
@@ -54,13 +56,31 @@ An attached launch, such as `claude`, shares your terminal and exits with the ap
 
 Sets up the proxy interactively. The wizard asks for the proxy source (only an external proxy exists today), then for each endpoint type whether to record one and its address: `host:port` or `http://host:port` for the HTTP endpoint, defaulting to `127.0.0.1:8118`, and `host:port` or `socks5://host:port` for the SOCKS endpoint, defaulting to `127.0.0.1:1080`. At least one endpoint is required. It probes each endpoint right away and shows the results. If a probe fails it asks whether to save anyway, so prx can be set up before the proxy is running. It ends by saving the config and listing the presets with whether each app was found on this machine. Re-run it any time to change the proxy.
 
-### `prx status`
+### `prx up`
 
-Probes every endpoint of the proxy and prints one line per endpoint with the result and latency, without launching anything. Exits 0 only when every endpoint is live and 1 otherwise, with the reason on each line.
+Starts the built-in proxy in the background and returns once its endpoints are live. It refuses with `not_builtin` on an external proxy, since there is nothing for prx to start. Before starting anything it checks that `autossh` and `privoxy` are on `PATH`, refusing with `dependency_missing` and the install command when one is not, and that both ports are free, refusing with `port_in_use` otherwise, so the proxy never listens on a port other than the one apps are injected with. Then it writes the privoxy config, starts autossh and privoxy, and waits up to the probe timeout for both endpoints to be live before printing the same report as `status`:
 
 ```
+Built-in proxy started
 Endpoint http://127.0.0.1:8118 is live (42 ms)
-Endpoint socks5://127.0.0.1:1080 is not live: connection refused (ECONNREFUSED)
+Endpoint socks5://127.0.0.1:1080 is live (31 ms)
+```
+
+Exits 0 when both endpoints are live and 1 when they are not in time, with the log directory named; the processes are left running either way, so autossh can keep retrying while you look at the log. An already running proxy is reported as such, still probed, and exits 0, so scripts can call `up` without checking first.
+
+### `prx down`
+
+Stops the built-in proxy: sends SIGTERM to autossh and privoxy and removes their pid files. A proxy that is not running is reported with exit 0. Refuses with `not_builtin` on an external proxy.
+
+### `prx status`
+
+Reports on the proxy without launching anything. For a built-in proxy the first line says whether it is running, meaning both processes exist. Then, for either source, one line per endpoint with the probe result and latency. Exits 0 only when every endpoint is live and 1 otherwise, with the reason on each line. A built-in proxy that is running but not live also gets the log directory named, which tells a dead tunnel from a stopped one:
+
+```
+Built-in proxy is running
+Endpoint http://127.0.0.1:8118 is live (42 ms)
+Endpoint socks5://127.0.0.1:1080 is not live: no response from the proxy before the timeout
+Logs are in /Users/me/.local/state/prx
 ```
 
 ### `prx list`
@@ -78,15 +98,22 @@ Prints the config path followed by the config contents.
 
 ### `prx uninstall`
 
-Lists what it will remove, asks for confirmation, and then removes the binary, the config directory, and the marked `PATH` block in `.zshrc`. Only the block the installer wrote is touched. `--yes` skips the confirmation for scripts.
+Lists what it will remove, asks for confirmation, and then removes the binary, the config directory, the state directory, and the marked `PATH` block in `.zshrc`. A running built-in proxy is stopped before its state directory goes, so nothing prx started outlives it. Only the block the installer wrote is touched. `--yes` skips the confirmation for scripts.
 
 ### `--json`
 
-`status`, `list`, `config`, and `run` accept `--json` for wrappers. In JSON mode a command prints exactly one JSON object to stdout, and for `run` the app's own output follows it. Exit codes are the same as in text mode.
+`up`, `down`, `status`, `list`, `config`, and `run` accept `--json` for wrappers. In JSON mode a command prints exactly one JSON object to stdout, and for `run` the app's own output follows it. Exit codes are the same as in text mode.
 
 ```sh
 prx status --json
 # {"source":"external","endpoints":{"http":{"host":"127.0.0.1","port":8118,"live":true,"latencyMs":42},"socks":{"host":"127.0.0.1","port":1080,"live":false,"reason":"refused","message":"connection refused (ECONNREFUSED)"}}}
+# {"source":"built-in","running":true,"endpoints":{...}}
+
+prx up --json
+# {"source":"built-in","running":true,"started":true,"endpoints":{...}}
+
+prx down --json
+# {"stopped":true}
 
 prx list --json
 # {"presets":[{"name":"claude","found":true,"launch":"attached","endpoints":["http"]},{"name":"chrome","found":false,"launch":"detached","endpoints":["socks","http"]}]}
@@ -111,7 +138,14 @@ Errors in JSON mode are a JSON object on stdout with a stable code and a message
 }
 ```
 
-The codes are `config_missing`, `config_invalid`, `proxy_not_live`, `unknown_preset`, `app_not_installed`, `app_already_running`, and `endpoint_missing`, the last one when the proxy has no endpoint of a type the preset can use, or `--via` names one it cannot.
+The codes are `config_missing`, `config_invalid`, `proxy_not_live`, `unknown_preset`, `app_not_installed`, `app_already_running`, `endpoint_missing`, `dependency_missing`, `port_in_use`, and `not_builtin`:
+
+| Code                 | Meaning                                                                                     |
+| -------------------- | ------------------------------------------------------------------------------------------- |
+| `endpoint_missing`   | The proxy has no endpoint of a type the preset can use, or `--via` names one it cannot      |
+| `dependency_missing` | `autossh` or `privoxy` is not on `PATH`; the message carries `brew install autossh privoxy` |
+| `port_in_use`        | Something already listens on a port the built-in proxy would use                            |
+| `not_builtin`        | `up` or `down` was run against an external proxy, which prx does not control                |
 
 ## Presets
 
@@ -131,6 +165,16 @@ An attached launch of Claude Code with `HTTP_PROXY`, `HTTPS_PROXY`, and their lo
 Launches a new Chrome instance through the macOS `open` command with `--proxy-server=<endpoint URL>` as an argument, followed by any passthrough arguments. The URL is `socks5://host:port` for a SOCKS endpoint, which Chrome prefers when the proxy has one, and `http://host:port` otherwise; with `socks5://` Chrome resolves DNS on the proxy side. Chrome keeps your normal profile. The launch is detached, so prx returns immediately and does not capture Chrome's output.
 
 **Chrome must not already be running.** Chrome ignores proxy flags when an instance already exists: the flag would be silently dropped and you would get an unproxied window that looks proxied. prx checks for a running instance before launching and refuses with exit code 3 and an explanation. Quit Chrome and run again.
+
+## The built-in proxy
+
+With `source: built-in`, prx runs the proxy itself from an ssh destination you give it: autossh keeps an ssh dynamic forward open, which is the SOCKS endpoint, and privoxy listens in front of it as the HTTP endpoint, forwarding everything to the tunnel. Both are Homebrew binaries prx expects on `PATH` and never installs; a missing one is reported with `brew install autossh privoxy`. See [ADR-0003](docs/adr/0003-built-in-proxy-runs-autossh-and-privoxy-detached.md).
+
+`prx up` starts both as detached background processes, so your terminal is free and the proxy keeps running across app launches; `prx down` stops them; `prx status` tells running from live. A proxy that is running can still have a dead endpoint, for instance while the tunnel reconnects, which is why `status` reports both.
+
+The tunnel ignores `~/.ssh/config` entirely and runs ssh with `-F /dev/null` and a fixed option set: batch mode, so it never prompts; exit on forward failure; `StrictHostKeyChecking=accept-new`, so a first connection to a new host works in the background and a changed key still fails; and server-alive settings that notice a dropped connection within seconds so autossh can reconnect. A passphrase-protected key must already be in ssh-agent. Jump hosts, `Host` aliases and other ssh config options are not available. See [ADR-0004](docs/adr/0004-tunnel-ignores-ssh-config.md).
+
+The pid files, the generated privoxy config and both log files live in the state directory, `~/.local/state/prx` or `$XDG_STATE_HOME/prx`, never in the config directory, so `prx config` still prints only what you edit by hand. A pid file whose process is gone, after a reboot for instance, counts as not running and is removed. The built-in proxy does not survive a reboot; `prx up` starts it again.
 
 ## How it works
 
@@ -175,23 +219,41 @@ The config lives at `~/.config/prx/config.json`, or under `$XDG_CONFIG_HOME/prx/
 }
 ```
 
-`version` is always `1` today and exists so a future shape change can be migrated. `source` says who runs the proxy; only `external` exists today. `endpoints` is keyed by endpoint type, `http` and `socks`, and needs at least one. A config in the earlier single-address shape is reported as invalid with a pointer to `prx init`. Probe URLs and the timeout are not stored, they are code-level defaults.
+`version` is always `1` today and exists so a future shape change can be migrated. `source` says who runs the proxy, `external` or `built-in`. An external proxy records `endpoints`, keyed by endpoint type, `http` and `socks`, with at least one required. A built-in proxy records the tunnel and the two ports instead; its endpoints are both on `127.0.0.1`:
+
+```json
+{
+  "version": 1,
+  "proxy": {
+    "source": "built-in",
+    "tunnel": {
+      "user": "me",
+      "host": "box.example.com",
+      "port": 22,
+      "identityFile": "/Users/me/.ssh/id_ed25519"
+    },
+    "socksPort": 1080,
+    "httpPort": 8118
+  }
+}
+```
+
+`identityFile` is optional; without it ssh uses the keys in ssh-agent. A config in the earlier single-address shape is reported as invalid with a pointer to `prx init`. Probe URLs and the timeout are not stored, they are code-level defaults.
 
 ## Exit codes
 
-| Code       | Meaning                                                                                                                     |
-| ---------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `0`        | Success                                                                                                                     |
-| `1`        | The proxy is not live, or the init wizard was cancelled                                                                     |
-| `2`        | Usage error: unknown command or option, unknown preset, app not installed, missing endpoint, or a missing or invalid config |
-| `3`        | Chrome is already running                                                                                                   |
-| app's code | An attached launch exits with the app's own exit code, or 128 plus the signal number when a signal killed the app           |
+| Code       | Meaning                                                                                                                                                                                         |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`        | Success                                                                                                                                                                                         |
+| `1`        | An endpoint is not live, from `run`, `up` or `status`, or the init wizard was cancelled                                                                                                         |
+| `2`        | Usage error: unknown command or option, unknown preset, app not installed, missing endpoint, missing dependency, busy port, `up` or `down` on an external proxy, or a missing or invalid config |
+| `3`        | Chrome is already running                                                                                                                                                                       |
+| app's code | An attached launch exits with the app's own exit code, or 128 plus the signal number when a signal killed the app                                                                               |
 
 Exit codes are identical in `--json` mode.
 
 ## Roadmap
 
-- **Built-in ssh SOCKS tunnel.** prx opens the ssh dynamic forward itself and runs an HTTP endpoint in front of it, so no separate proxy needs to run. The `source` field on the proxy config is the hook for this second source.
 - **More presets with new injection kinds.** Desktop apps such as ChatGPT and Claude desktop ignore environment variables and proxy flags, so each needs its own injection kind alongside the existing environment and argument kinds.
 - **Realtime probing with blocking of unproxied traffic.** Today the proxy is probed once, before launch. The next step is to keep probing while the app runs and block its traffic when the proxy breaks mid-session, so nothing leaks unproxied. How to block without a system-wide mechanism, which ADR-0001 rules out, is an open question.
 

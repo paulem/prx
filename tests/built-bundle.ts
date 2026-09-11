@@ -55,6 +55,6 @@ export function runNode(
 
 /** The environment a subprocess gets when it must treat a temp directory as the user's home */
 export function isolatedHomeEnv(home: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  const { XDG_CONFIG_HOME: _ignored, ...inherited } = process.env;
+  const { XDG_CONFIG_HOME: _config, XDG_STATE_HOME: _state, ...inherited } = process.env;
   return { ...inherited, HOME: home, ...extra };
 }
