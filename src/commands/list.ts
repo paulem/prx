@@ -1,3 +1,4 @@
+import type { EndpointType } from "../config.ts";
 import type { Reporter } from "../output.ts";
 import { locateApp, presets } from "../presets/index.ts";
 import type { SystemAdapter } from "../system.ts";
@@ -11,6 +12,7 @@ export interface PresetListing {
   name: string;
   found: boolean;
   launch: "attached" | "detached";
+  endpoints: EndpointType[];
 }
 
 export async function listPresets(system: SystemAdapter): Promise<PresetListing[]> {
@@ -19,6 +21,7 @@ export async function listPresets(system: SystemAdapter): Promise<PresetListing[
       name: preset.name,
       found: (await locateApp(system, preset.app)) !== undefined,
       launch: preset.launch,
+      endpoints: preset.endpoints,
     })),
   );
 }
@@ -28,7 +31,8 @@ export function formatPresetListing(listing: PresetListing[]): string {
   return listing
     .map((entry) => {
       const found = entry.found ? "found  " : "missing";
-      return `${entry.name.padEnd(nameWidth)}  ${found}  ${entry.launch}\n`;
+      const endpoints = entry.endpoints.join(",");
+      return `${entry.name.padEnd(nameWidth)}  ${found}  ${entry.launch}  ${endpoints}\n`;
     })
     .join("");
 }

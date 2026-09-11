@@ -1,4 +1,4 @@
-import { Command, CommanderError } from "commander";
+import { Command, CommanderError, Option } from "commander";
 import pkg from "../package.json" with { type: "json" };
 import { runConfig } from "./commands/config.ts";
 import { runInit } from "./commands/init.ts";
@@ -6,6 +6,7 @@ import { runList } from "./commands/list.ts";
 import { runRun } from "./commands/run.ts";
 import { runStatus } from "./commands/status.ts";
 import { runUninstall } from "./commands/uninstall.ts";
+import { ENDPOINT_TYPES, type EndpointType } from "./config.ts";
 import { PrxError } from "./errors.ts";
 import { createReporter, type Reporter } from "./output.ts";
 import { DEFAULT_PROBE_TIMEOUT_MS } from "./probe.ts";
@@ -23,6 +24,7 @@ interface JsonOption {
 
 interface RunOptions extends JsonOption {
   check: boolean;
+  via?: EndpointType;
 }
 
 interface YesOption {
@@ -67,6 +69,12 @@ export async function runCli(
     .argument("<preset>", "The app to launch: claude or chrome")
     .argument("[passthrough...]", "Arguments handed to the app verbatim")
     .option("--no-check", "Skip the probe and launch anyway")
+    .addOption(
+      new Option(
+        "--via <type>",
+        "Inject this endpoint type instead of the preset's preference",
+      ).choices([...ENDPOINT_TYPES]),
+    )
     .option("--json", "Print the launch as one JSON object")
     .passThroughOptions()
     .action(async (presetName: string, passthrough: string[], commandOptions: RunOptions) => {
@@ -81,6 +89,7 @@ export async function runCli(
           passthrough,
           check: commandOptions.check,
           json,
+          ...(commandOptions.via === undefined ? {} : { via: commandOptions.via }),
         }),
       );
     });

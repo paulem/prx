@@ -1,4 +1,12 @@
-import { endpointUrl, findEndpoint, readConfig, type Config, type Endpoint } from "../config.ts";
+import {
+  endpointUrl,
+  findEndpoint,
+  readConfig,
+  type Config,
+  type Endpoint,
+  type EndpointType,
+  type ProxyConfig,
+} from "../config.ts";
 import { PrxError } from "../errors.ts";
 import { argsInjection, envInjection, exitCodeFromOutcome, macOpenLaunch } from "../launch.ts";
 import type { Reporter } from "../output.ts";
@@ -15,6 +23,8 @@ export interface RunCommand {
   passthrough: string[];
   check: boolean;
   json: boolean;
+  /** Overrides the preset's endpoint preference for this launch */
+  via?: EndpointType;
 }
 
 export async function runRun(command: RunCommand): Promise<number> {
@@ -29,13 +39,7 @@ export async function runRun(command: RunCommand): Promise<number> {
   }
 
   const config = await readConfigOrInit(command);
-  const endpoint = findEndpoint(config.proxy, "http");
-  if (endpoint === undefined) {
-    throw new PrxError(
-      "endpoint_missing",
-      `The proxy has no http endpoint, which ${preset.name} needs. Run prx init to record one.`,
-    );
-  }
+  const endpoint = chooseEndpoint(preset, config.proxy, command.via);
 
   const appPath = await locateApp(system, preset.app);
   if (appPath === undefined) {
@@ -78,6 +82,40 @@ export async function runRun(command: RunCommand): Promise<number> {
     env: injected.env,
   });
   return exitCodeFromOutcome(outcome);
+}
+
+// The option wins outright; otherwise the first type the preset prefers that the proxy has
+function chooseEndpoint(
+  preset: Preset,
+  proxy: ProxyConfig,
+  via: EndpointType | undefined,
+): Endpoint {
+  if (via !== undefined) {
+    if (!preset.endpoints.includes(via)) {
+      throw new PrxError(
+        "endpoint_missing",
+        `${preset.name} cannot use a ${via} endpoint, only ${preset.endpoints.join(" or ")}.`,
+      );
+    }
+    const endpoint = findEndpoint(proxy, via);
+    if (endpoint === undefined) {
+      throw new PrxError(
+        "endpoint_missing",
+        `The proxy has no ${via} endpoint. Run prx init to record one.`,
+      );
+    }
+    return endpoint;
+  }
+  for (const type of preset.endpoints) {
+    const endpoint = findEndpoint(proxy, type);
+    if (endpoint !== undefined) {
+      return endpoint;
+    }
+  }
+  throw new PrxError(
+    "endpoint_missing",
+    `The proxy has no ${preset.endpoints.join(" or ")} endpoint, which ${preset.name} needs. Run prx init to record one.`,
+  );
 }
 
 interface Injected {

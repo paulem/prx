@@ -129,6 +129,48 @@ describe("prx run claude", () => {
   });
 });
 
+describe("prx run claude endpoint selection", () => {
+  test("keeps using the HTTP endpoint when the proxy also has a SOCKS one", async () => {
+    proxy = await startTestProxy("live");
+    const fake = createFakeSystem();
+    writeFakeConfig(fake, externalProxy({ http: proxy, socks: { host: "127.0.0.1", port: 1 } }));
+    fake.onPath.set("claude", CLAUDE_PATH);
+
+    const exitCode = await runCli(["run", "--json", "claude"], fake.system);
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(fake.stdout()).endpoint).toEqual({
+      type: "http",
+      host: "127.0.0.1",
+      port: proxy.port,
+    });
+  });
+
+  test("a SOCKS-only proxy fails with endpoint_missing and exit 2 before any launch", async () => {
+    const fake = createFakeSystem();
+    writeFakeConfig(fake, externalProxy({ socks: { host: "127.0.0.1", port: 1080 } }));
+    fake.onPath.set("claude", CLAUDE_PATH);
+
+    const exitCode = await runCli(["run", "claude"], fake.system);
+
+    expect(exitCode).toBe(2);
+    expect(fake.spawns).toEqual([]);
+    expect(fake.stderr()).toBe(
+      "The proxy has no http endpoint, which claude needs. Run prx init to record one.\n",
+    );
+  });
+
+  test("--via socks fails with endpoint_missing because claude cannot use SOCKS", async () => {
+    const fake = await withLiveProxy();
+
+    const exitCode = await runCli(["run", "--via", "socks", "claude"], fake.system);
+
+    expect(exitCode).toBe(2);
+    expect(fake.spawns).toEqual([]);
+    expect(fake.stderr()).toBe("claude cannot use a socks endpoint, only http.\n");
+  });
+});
+
 describe("prx run errors", () => {
   test("an unknown preset is a usage error with exit 2", async () => {
     const fake = await withLiveProxy();

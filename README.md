@@ -19,7 +19,7 @@ The script builds a single bundled file, copies it to `~/.local/bin/prx`, and ad
 ## Usage
 
 ```
-prx run [--no-check] [--json] <preset> [passthrough...]
+prx run [--no-check] [--via <type>] [--json] <preset> [passthrough...]
 prx init
 prx status [--json]
 prx list [--json]
@@ -31,10 +31,13 @@ Bare `prx` prints help. `--help` and `--version` work as usual.
 
 ### `prx run <preset> [passthrough...]`
 
-Probes the proxy's HTTP endpoint, then launches the app named by the preset with the endpoint injected. Before the launch, one line on stderr names the endpoint, the probe latency, and the app:
+Picks the endpoint for the app, probes it, then launches the app named by the preset with that endpoint injected. Each preset lists the endpoint types it can use in order of preference, and `run` takes the first one the proxy has: Chrome goes through the SOCKS endpoint when the proxy has one and falls back to HTTP, Claude Code always uses HTTP. `--via <type>` overrides the choice for one launch, so `prx run --via http chrome` sends Chrome through the HTTP endpoint. When the preset cannot use the type, or the proxy has no endpoint of a type the preset can use, the launch fails with `endpoint_missing` and exit 2 before anything starts.
+
+The probe goes through the chosen endpoint, so a live HTTP endpoint never hides a dead SOCKS one. Before the launch, one line on stderr names the endpoint with its type, the probe latency, and the app:
 
 ```
 prx: http endpoint http://127.0.0.1:8118 is live (42 ms), launching claude
+prx: socks endpoint socks5://127.0.0.1:1080 is live (31 ms), launching chrome
 ```
 
 Everything after the preset name is passed to the app verbatim as passthrough arguments, so `prx run claude --resume` runs exactly like `claude --resume`. prx's own options go before the preset name:
@@ -62,11 +65,11 @@ Endpoint socks5://127.0.0.1:1080 is not live: connection refused (ECONNREFUSED)
 
 ### `prx list`
 
-Shows the presets, whether each app is installed, and its launch mode:
+Shows the presets, whether each app is installed, its launch mode, and the endpoint types it can use, most preferred first:
 
 ```
-claude  found    attached
-chrome  missing  detached
+claude  found    attached  http
+chrome  missing  detached  socks,http
 ```
 
 ### `prx config`
@@ -86,13 +89,13 @@ prx status --json
 # {"source":"external","endpoints":{"http":{"host":"127.0.0.1","port":8118,"live":true,"latencyMs":42},"socks":{"host":"127.0.0.1","port":1080,"live":false,"reason":"refused","message":"connection refused (ECONNREFUSED)"}}}
 
 prx list --json
-# {"presets":[{"name":"claude","found":true,"launch":"attached"},{"name":"chrome","found":false,"launch":"detached"}]}
+# {"presets":[{"name":"claude","found":true,"launch":"attached","endpoints":["http"]},{"name":"chrome","found":false,"launch":"detached","endpoints":["socks","http"]}]}
 
 prx config --json
 # {"path":"/Users/me/.config/prx/config.json","config":{"version":1,"proxy":{...}}}
 
 prx run --json chrome
-# {"preset":"chrome","endpoint":{"type":"http","host":"127.0.0.1","port":8118},"latencyMs":42}
+# {"preset":"chrome","endpoint":{"type":"socks","host":"127.0.0.1","port":1080},"latencyMs":31}
 ```
 
 `run --json` prints the launch object before the app starts. With `--no-check`, `latencyMs` is `null`. No PID is reported.
@@ -108,24 +111,24 @@ Errors in JSON mode are a JSON object on stdout with a stable code and a message
 }
 ```
 
-The codes are `config_missing`, `config_invalid`, `proxy_not_live`, `unknown_preset`, `app_not_installed`, `app_already_running`, and `endpoint_missing`, the last one for a proxy without the HTTP endpoint `run` needs.
+The codes are `config_missing`, `config_invalid`, `proxy_not_live`, `unknown_preset`, `app_not_installed`, `app_already_running`, and `endpoint_missing`, the last one when the proxy has no endpoint of a type the preset can use, or `--via` names one it cannot.
 
 ## Presets
 
-A preset is a built-in description of how to launch one app through the proxy: where the app lives, how the proxy is injected, and how it is launched. Presets are defined in code, one file per app, under `src/presets/`. There are no user-defined presets.
+A preset is a built-in description of how to launch one app through the proxy: where the app lives, which endpoint types it can use, how the endpoint is injected, and how it is launched. Presets are defined in code, one file per app, under `src/presets/`. There are no user-defined presets.
 
-| Preset   | App                                                        | Injection             | Launch   |
-| -------- | ---------------------------------------------------------- | --------------------- | -------- |
-| `claude` | `claude` on `PATH`                                         | environment variables | attached |
-| `chrome` | `Google Chrome.app` in `/Applications` or `~/Applications` | command-line argument | detached |
+| Preset   | App                                                        | Endpoints       | Injection             | Launch   |
+| -------- | ---------------------------------------------------------- | --------------- | --------------------- | -------- |
+| `claude` | `claude` on `PATH`                                         | `http`          | environment variables | attached |
+| `chrome` | `Google Chrome.app` in `/Applications` or `~/Applications` | `socks`, `http` | command-line argument | detached |
 
 ### claude
 
-An attached launch of Claude Code with `HTTP_PROXY`, `HTTPS_PROXY`, and their lowercase variants set to the HTTP endpoint's URL. `NO_PROXY` and `no_proxy` carry the bypass `localhost,127.0.0.1,::1`, so Claude Code can still reach local servers such as MCP servers without going through the proxy. Before the launch, the probe goes to `https://api.anthropic.com/`, the host Claude Code actually needs. prx exits with Claude Code's exit code.
+An attached launch of Claude Code with `HTTP_PROXY`, `HTTPS_PROXY`, and their lowercase variants set to the HTTP endpoint's URL. Claude Code does not support SOCKS proxies, so the preset lists only `http`. `NO_PROXY` and `no_proxy` carry the bypass `localhost,127.0.0.1,::1`, so Claude Code can still reach local servers such as MCP servers without going through the proxy. Before the launch, the probe goes to `https://api.anthropic.com/`, the host Claude Code actually needs. prx exits with Claude Code's exit code.
 
 ### chrome
 
-Launches a new Chrome instance through the macOS `open` command with `--proxy-server=<endpoint URL>` as an argument, followed by any passthrough arguments. Chrome keeps your normal profile. The launch is detached, so prx returns immediately and does not capture Chrome's output.
+Launches a new Chrome instance through the macOS `open` command with `--proxy-server=<endpoint URL>` as an argument, followed by any passthrough arguments. The URL is `socks5://host:port` for a SOCKS endpoint, which Chrome prefers when the proxy has one, and `http://host:port` otherwise; with `socks5://` Chrome resolves DNS on the proxy side. Chrome keeps your normal profile. The launch is detached, so prx returns immediately and does not capture Chrome's output.
 
 **Chrome must not already be running.** Chrome ignores proxy flags when an instance already exists: the flag would be silently dropped and you would get an unproxied window that looks proxied. prx checks for a running instance before launching and refuses with exit code 3 and an explanation. Quit Chrome and run again.
 

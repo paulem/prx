@@ -1,3 +1,5 @@
+import type { EndpointType } from "../config.ts";
+
 /** Where an app lives on this machine and how to find it */
 export type AppLocation = { kind: "path"; command: string } | { kind: "application"; name: string };
 
@@ -9,6 +11,8 @@ export interface Preset {
   name: string;
   app: AppLocation;
   injection: Injection;
+  /** The endpoint types the app can use, most preferred first */
+  endpoints: EndpointType[];
   launch: LaunchMode;
   /** Overrides the default probe URL so the probe exercises the host the app needs */
   probeUrl?: string;

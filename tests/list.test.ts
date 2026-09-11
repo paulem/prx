@@ -3,14 +3,16 @@ import { runCli } from "../src/cli.ts";
 import { createFakeSystem } from "./fake-system.ts";
 
 describe("prx list", () => {
-  test("shows each preset with found or missing and its launch mode", async () => {
+  test("shows each preset with found or missing, its launch mode and its endpoint types", async () => {
     const fake = createFakeSystem();
     fake.onPath.set("claude", "/home/test/.local/bin/claude");
 
     const exitCode = await runCli(["list"], fake.system);
 
     expect(exitCode).toBe(0);
-    expect(fake.stdout()).toBe("claude  found    attached\nchrome  missing  detached\n");
+    expect(fake.stdout()).toBe(
+      "claude  found    attached  http\nchrome  missing  detached  socks,http\n",
+    );
     expect(fake.stderr()).toBe("");
   });
 
@@ -20,7 +22,9 @@ describe("prx list", () => {
 
     await runCli(["list"], fake.system);
 
-    expect(fake.stdout()).toBe("claude  missing  attached\nchrome  found    detached\n");
+    expect(fake.stdout()).toBe(
+      "claude  missing  attached  http\nchrome  found    detached  socks,http\n",
+    );
   });
 
   test("--json prints one object listing the presets", async () => {
@@ -32,8 +36,8 @@ describe("prx list", () => {
     expect(exitCode).toBe(0);
     expect(JSON.parse(fake.stdout())).toEqual({
       presets: [
-        { name: "claude", found: true, launch: "attached" },
-        { name: "chrome", found: false, launch: "detached" },
+        { name: "claude", found: true, launch: "attached", endpoints: ["http"] },
+        { name: "chrome", found: false, launch: "detached", endpoints: ["socks", "http"] },
       ],
     });
   });

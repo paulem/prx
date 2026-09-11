@@ -62,7 +62,7 @@ describe("prx init with an external proxy", () => {
       new RegExp(
         `^Endpoint http://127\\.0\\.0\\.1:${http.port} is live \\(\\d+ ms\\)\n` +
           `Saved config to ${FAKE_CONFIG_PATH}\n` +
-          "claude  found    attached\nchrome  missing  detached\n$",
+          "claude  found    attached  http\nchrome  missing  detached  socks,http\n$",
       ),
     );
     expect(fake.stderr()).toBe("");
