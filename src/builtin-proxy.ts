@@ -73,7 +73,8 @@ export async function stopBuiltInProxy(system: SystemAdapter): Promise<boolean> 
   return stopped.some(Boolean);
 }
 
-async function findDependencies(system: SystemAdapter): Promise<Record<Dependency, string>> {
+/** The paths of autossh and privoxy, or a dependency_missing error naming what to install */
+export async function findDependencies(system: SystemAdapter): Promise<Record<Dependency, string>> {
   const found = await Promise.all(DEPENDENCIES.map((name) => system.findOnPath(name)));
   const missing = DEPENDENCIES.filter((_name, index) => found[index] === undefined);
   if (missing.length > 0) {

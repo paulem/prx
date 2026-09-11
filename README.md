@@ -61,7 +61,13 @@ An attached launch, such as `claude`, shares your terminal and exits with the ap
 
 ### `prx init`
 
-Sets up the proxy interactively. The wizard asks for the proxy source (only an external proxy exists today), then for each endpoint type whether to record one and its address: `host:port` or `http://host:port` for the HTTP endpoint, defaulting to `127.0.0.1:8118`, and `host:port` or `socks5://host:port` for the SOCKS endpoint, defaulting to `127.0.0.1:1080`. At least one endpoint is required. It probes each endpoint right away and shows the results. If a probe fails it asks whether to save anyway, so prx can be set up before the proxy is running. It ends by saving the config and listing the presets with whether each app was found on this machine. Re-run it any time to change the proxy.
+Sets up the proxy interactively. The first question is the proxy source, external or built-in.
+
+For an external proxy the wizard asks, for each endpoint type, whether to record one and its address: `host:port` or `http://host:port` for the HTTP endpoint, defaulting to `127.0.0.1:8118`, and `host:port` or `socks5://host:port` for the SOCKS endpoint, defaulting to `127.0.0.1:1080`. At least one endpoint is required. It probes each endpoint right away and shows the results. If a probe fails it asks whether to save anyway, so prx can be set up before the proxy is running.
+
+For a built-in proxy the wizard first checks that `autossh` and `privoxy` are installed and stops with the install command when one is missing, so you never fill in the whole wizard only to be refused. Then it asks for the ssh user, host and port, defaulting to 22, and an optional identity file, empty to use the keys in ssh-agent. Then the SOCKS and HTTP ports, defaulting to 1080 and 8118; a port something already listens on is reported and asked again, so `prx up` cannot fail later for a reason you could have fixed at setup. After saving, it offers to start the proxy right away, defaulting to yes, and shows the same report as `prx up`.
+
+Both paths end by listing the presets with whether each app was found on this machine. Cancelling anywhere leaves the existing config untouched. Re-run the wizard any time to change the proxy.
 
 ### `prx up`
 

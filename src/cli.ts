@@ -98,7 +98,7 @@ export async function runCli(
 
   program
     .command("init")
-    .description("Set up the proxy interactively")
+    .description("Set up an external or built-in proxy interactively")
     .action(async () => {
       const reporter = createReporter(system, false);
       await report(reporter, () => runInit({ system, probeTimeoutMs }));

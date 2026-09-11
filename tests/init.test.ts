@@ -68,17 +68,12 @@ describe("prx init with an external proxy", () => {
     expect(fake.stderr()).toBe("");
   });
 
-  test("offers the external source and defaults to recording only an HTTP endpoint", async () => {
+  test("defaults to recording only an HTTP endpoint", async () => {
     const fake = createFakeSystem();
     fake.answers.push("external", CANCEL);
 
     await runCli(["init"], fake.system);
 
-    expect(fake.questions[0]).toEqual({
-      kind: "select",
-      message: "Proxy source",
-      options: [{ value: "external", label: "External proxy, something else runs it" }],
-    });
     expect(fake.questions[1]).toEqual({
       kind: "confirm",
       message: "Record an HTTP endpoint?",
@@ -288,5 +283,252 @@ describe("prx run on a first run", () => {
     expect(exitCode).toBe(2);
     expect(JSON.parse(fake.stdout())).toMatchObject({ error: { code: "config_missing" } });
     expect(fake.questions).toEqual([]);
+  });
+});
+
+describe("prx init with a built-in proxy", () => {
+  const AUTOSSH = "/opt/homebrew/bin/autossh";
+  const PRIVOXY = "/opt/homebrew/bin/privoxy";
+
+  function withDependencies(): FakeSystem {
+    const fake = createFakeSystem();
+    fake.onPath.set("autossh", AUTOSSH);
+    fake.onPath.set("privoxy", PRIVOXY);
+    return fake;
+  }
+
+  test("offers both sources", async () => {
+    const fake = createFakeSystem();
+    fake.answers.push(CANCEL);
+
+    await runCli(["init"], fake.system);
+
+    expect(fake.questions[0]).toEqual({
+      kind: "select",
+      message: "Proxy source",
+      options: [
+        { value: "external", label: "External proxy, something else runs it" },
+        { value: "built-in", label: "Built-in proxy, prx runs an ssh tunnel" },
+      ],
+    });
+  });
+
+  test("a missing dependency stops the wizard with the install hint and saves nothing", async () => {
+    const fake = createFakeSystem();
+    fake.onPath.set("autossh", AUTOSSH);
+    fake.answers.push("built-in");
+
+    const exitCode = await runCli(["init"], fake.system);
+
+    expect(exitCode).toBe(2);
+    expect(questionMessages(fake)).toEqual(["Proxy source"]);
+    expect(savedConfig(fake)).toBeUndefined();
+    expect(fake.stderr()).toBe(
+      "privoxy is not installed. Install it with: brew install autossh privoxy\n",
+    );
+  });
+
+  test("asks the tunnel fields and ports with their defaults, saves, and can skip starting", async () => {
+    const fake = withDependencies();
+    fake.onPath.set("claude", "/home/test/.local/bin/claude");
+    fake.answers.push(
+      "built-in",
+      "me",
+      "box.example",
+      USE_DEFAULT,
+      USE_DEFAULT,
+      USE_DEFAULT,
+      USE_DEFAULT,
+      false,
+    );
+
+    const exitCode = await runCli(["init"], fake.system);
+
+    expect(exitCode).toBe(0);
+    expect(fake.questions.slice(1)).toEqual([
+      { kind: "text", message: "ssh user", initialValue: "" },
+      { kind: "text", message: "ssh host", initialValue: "" },
+      { kind: "text", message: "ssh port", initialValue: "22" },
+      { kind: "text", message: "Identity file, empty to use ssh-agent", initialValue: "" },
+      { kind: "text", message: "SOCKS port", initialValue: "1080" },
+      { kind: "text", message: "HTTP port", initialValue: "8118" },
+      { kind: "confirm", message: "Start the built-in proxy now?", initialValue: true },
+    ]);
+    expect(savedConfig(fake)).toEqual({
+      version: 1,
+      proxy: {
+        source: "built-in",
+        tunnel: { user: "me", host: "box.example", port: 22 },
+        socksPort: 1080,
+        httpPort: 8118,
+      },
+    });
+    expect(fake.backgroundStarts).toEqual([]);
+    expect(fake.stdout()).toBe(
+      `Saved config to ${FAKE_CONFIG_PATH}\n` +
+        "claude  found    attached  http\nchrome  missing  detached  socks,http\n",
+    );
+  });
+
+  test("saves an identity file and a custom ssh port, expanding a leading tilde", async () => {
+    const fake = withDependencies();
+    fake.answers.push(
+      "built-in",
+      "me",
+      "box.example",
+      "2222",
+      "~/.ssh/id_ed25519",
+      "1081",
+      "8119",
+      false,
+    );
+
+    await runCli(["init"], fake.system);
+
+    expect(savedConfig(fake)).toEqual({
+      version: 1,
+      proxy: {
+        source: "built-in",
+        tunnel: {
+          user: "me",
+          host: "box.example",
+          port: 2222,
+          identityFile: "/home/test/.ssh/id_ed25519",
+        },
+        socksPort: 1081,
+        httpPort: 8119,
+      },
+    });
+  });
+
+  test("validates the tunnel fields and asks again", async () => {
+    const fake = withDependencies();
+    fake.answers.push(
+      "built-in",
+      "  ",
+      "me",
+      "box example",
+      "box.example",
+      "0",
+      "ssh",
+      "22",
+      USE_DEFAULT,
+      USE_DEFAULT,
+      "1080",
+      "8118",
+      false,
+    );
+
+    const exitCode = await runCli(["init"], fake.system);
+
+    expect(exitCode).toBe(0);
+    expect(fake.rejectedInputs).toEqual([
+      { input: "  ", message: "Enter a value" },
+      { input: "box example", message: "A hostname cannot contain spaces" },
+      { input: "0", message: "Port must be between 1 and 65535" },
+      { input: "ssh", message: "Port must be between 1 and 65535" },
+      { input: "1080", message: "Must differ from the SOCKS port" },
+    ]);
+    expect(savedConfig(fake)).toMatchObject({ proxy: { socksPort: 1080, httpPort: 8118 } });
+  });
+
+  test("a busy port is reported and asked again, and the retried value is saved", async () => {
+    const fake = withDependencies();
+    fake.busyPorts.add(1080);
+    fake.busyPorts.add(8118);
+    fake.answers.push(
+      "built-in",
+      "me",
+      "box.example",
+      USE_DEFAULT,
+      USE_DEFAULT,
+      USE_DEFAULT,
+      "1081",
+      USE_DEFAULT,
+      "8119",
+      false,
+    );
+
+    const exitCode = await runCli(["init"], fake.system);
+
+    expect(exitCode).toBe(0);
+    expect(questionMessages(fake).filter((message) => message.endsWith("port"))).toEqual([
+      "ssh port",
+      "SOCKS port",
+      "SOCKS port",
+      "HTTP port",
+      "HTTP port",
+    ]);
+    expect(fake.stdout()).toMatch(/^Port 1080 is already in use\nPort 8118 is already in use\n/);
+    expect(savedConfig(fake)).toMatchObject({ proxy: { socksPort: 1081, httpPort: 8119 } });
+  });
+
+  test("starting now runs the same flow as up and prints its report", async () => {
+    const http = await testProxy("live");
+    const socks = await testProxy("socks");
+    const fake = withDependencies();
+    fake.answers.push(
+      "built-in",
+      "me",
+      "box.example",
+      USE_DEFAULT,
+      USE_DEFAULT,
+      String(socks.port),
+      String(http.port),
+      true,
+    );
+
+    const exitCode = await runCli(["init"], fake.system);
+
+    expect(exitCode).toBe(0);
+    expect(fake.backgroundStarts.map((start) => start.command)).toEqual([AUTOSSH, PRIVOXY]);
+    expect(fake.backgroundStarts[0]?.args).toContain(`127.0.0.1:${socks.port}`);
+    expect(fake.files.get("/home/test/.local/state/prx/privoxy.conf")).toContain(
+      `listen-address 127.0.0.1:${http.port}\n`,
+    );
+    expect(fake.stdout()).toMatch(
+      new RegExp(
+        `^Saved config to ${FAKE_CONFIG_PATH}\n` +
+          "Built-in proxy started\n" +
+          `Endpoint http://127\\.0\\.0\\.1:${http.port} is live \\(\\d+ ms\\)\n` +
+          `Endpoint socks5://127\\.0\\.0\\.1:${socks.port} is live \\(\\d+ ms\\)\n` +
+          "claude  missing  attached  http\nchrome  missing  detached  socks,http\n$",
+      ),
+    );
+  });
+
+  test("cancelling a tunnel question saves nothing", async () => {
+    const fake = withDependencies();
+    fake.answers.push("built-in", "me", CANCEL);
+
+    const exitCode = await runCli(["init"], fake.system);
+
+    expect(exitCode).toBe(1);
+    expect(savedConfig(fake)).toBeUndefined();
+    expect(fake.stderr()).toBe("Cancelled, nothing was saved\n");
+  });
+
+  test("prx run without a config sets up a built-in proxy, starts it, and launches", async () => {
+    const http = await testProxy("live");
+    const socks = await testProxy("socks");
+    const fake = withDependencies();
+    fake.onPath.set("claude", "/home/test/.local/bin/claude");
+    fake.answers.push(
+      "built-in",
+      "me",
+      "box.example",
+      USE_DEFAULT,
+      USE_DEFAULT,
+      String(socks.port),
+      String(http.port),
+      true,
+    );
+
+    const exitCode = await runCli(["run", "claude"], fake.system);
+
+    expect(exitCode).toBe(0);
+    expect(fake.backgroundStarts).toHaveLength(2);
+    expect(fake.spawns).toHaveLength(1);
+    expect(fake.stderr()).toMatch(/^prx: http endpoint .* is live .*, launching claude\n$/);
   });
 });
