@@ -1,3 +1,4 @@
+import { isBuiltInProxyRunning, startBuiltInProxy } from "../builtin-proxy.ts";
 import {
   endpointUrl,
   findEndpoint,
@@ -11,7 +12,7 @@ import { PrxError } from "../errors.ts";
 import { argsInjection, envInjection, exitCodeFromOutcome, macOpenLaunch } from "../launch.ts";
 import type { Reporter } from "../output.ts";
 import { findPreset, locateApp, type Preset } from "../presets/index.ts";
-import { DEFAULT_PROBE_URL, probe } from "../probe.ts";
+import { DEFAULT_PROBE_URL, probe, probeUntilLive } from "../probe.ts";
 import type { SystemAdapter } from "../system.ts";
 import { initWizard } from "./init.ts";
 
@@ -58,7 +59,12 @@ export async function runRun(command: RunCommand): Promise<number> {
     }
   }
 
-  const latencyMs = await probeBeforeLaunch(command, preset, endpoint);
+  const started = await startIfStopped(system, config.proxy);
+  if (started && !json) {
+    system.writeStderr("prx: started the built-in proxy\n");
+  }
+
+  const latencyMs = await probeBeforeLaunch(command, preset, endpoint, started);
 
   if (json) {
     reporter.result("", { preset: preset.name, endpoint, latencyMs });
@@ -143,15 +149,29 @@ async function readConfigOrInit(command: RunCommand): Promise<Config> {
   }
 }
 
+// A launch after a reboot is never a dead end: a built-in proxy that is not running is started
+// exactly as up starts it, with the same checks and errors
+async function startIfStopped(system: SystemAdapter, proxy: ProxyConfig): Promise<boolean> {
+  if (proxy.source !== "built-in" || (await isBuiltInProxyRunning(system))) {
+    return false;
+  }
+  await startBuiltInProxy(system, proxy);
+  return true;
+}
+
+// A proxy that was just started gets the whole timeout to come up; one that was already there
+// is probed once
 async function probeBeforeLaunch(
   command: RunCommand,
   preset: Preset,
   endpoint: Endpoint,
+  justStarted: boolean,
 ): Promise<number | null> {
   if (!command.check) {
     return null;
   }
-  const result = await probe(endpoint, {
+  const probeEndpoint = justStarted ? probeUntilLive : probe;
+  const result = await probeEndpoint(endpoint, {
     url: preset.probeUrl ?? DEFAULT_PROBE_URL,
     timeoutMs: command.probeTimeoutMs,
   });

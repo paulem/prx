@@ -42,13 +42,20 @@ prx: http endpoint http://127.0.0.1:8118 is live (42 ms), launching claude
 prx: socks endpoint socks5://127.0.0.1:1080 is live (31 ms), launching chrome
 ```
 
+A built-in proxy that is not running, after a reboot for instance, is started first, exactly as `prx up` starts it and with the same `dependency_missing` and `port_in_use` refusals. `run` then waits up to the probe timeout for the chosen endpoint alone to come live and says so on stderr before the launch line:
+
+```
+prx: started the built-in proxy
+prx: http endpoint http://127.0.0.1:8118 is live (1204 ms), launching claude
+```
+
 Everything after the preset name is passed to the app verbatim as passthrough arguments, so `prx run claude --resume` runs exactly like `claude --resume`. prx's own options go before the preset name:
 
 ```sh
 prx run --no-check claude --resume
 ```
 
-`--no-check` skips the probe and launches anyway. When no config exists yet, `run` starts the init wizard first, so a first run is never a dead end. In `--json` mode the wizard is skipped and a missing config is an error, since a wrapper cannot answer prompts.
+`--no-check` skips the probe and launches anyway; it still starts a stopped built-in proxy, without waiting for it. When no config exists yet, `run` starts the init wizard first, so a first run is never a dead end. In `--json` mode the wizard is skipped and a missing config is an error, since a wrapper cannot answer prompts.
 
 An attached launch, such as `claude`, shares your terminal and exits with the app's exit code. A detached launch, such as `chrome`, returns as soon as the app has been handed off.
 

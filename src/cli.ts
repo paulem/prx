@@ -67,7 +67,7 @@ export async function runCli(
 
   program
     .command("run")
-    .description("Launch an app through the proxy")
+    .description("Launch an app through the proxy, starting a built-in proxy first when needed")
     .argument("<preset>", "The app to launch: claude or chrome")
     .argument("[passthrough...]", "Arguments handed to the app verbatim")
     .option("--no-check", "Skip the probe and launch anyway")
