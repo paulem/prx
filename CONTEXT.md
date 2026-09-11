@@ -67,3 +67,7 @@ _Avoid_: extra args, child args, rest args
 **Bypass**:
 Hosts whose traffic goes directly to the network instead of through the proxy. Always the local machine itself.
 _Avoid_: exclusions, no-proxy list, whitelist
+
+**Hint**:
+The next command a person should run after an error, shown apart from the error's message.
+_Avoid_: suggestion, tip, advice, help text

@@ -31,6 +31,10 @@ prx uninstall [--yes]
 
 Bare `prx` prints help. `--help` and `--version` work as usual.
 
+### Output
+
+On a terminal, output is decorated: a symbol and color mark each state, waits show a spinner that names what prx is waiting for and why the last attempt failed, and file paths are clickable links shortened with `~`. When stdout is a pipe, or `NO_COLOR` is set, every command prints the plain lines shown in this README, one fact per line, so scripts can match them. `--json` prints one object instead. Errors go to stderr as one sentence followed by a hint naming the next command to run; on a terminal the hint sits on its own line.
+
 ### `prx run <preset> [passthrough...]`
 
 Picks the endpoint for the app, probes it, then launches the app named by the preset with that endpoint injected. Each preset lists the endpoint types it can use in order of preference, and `run` takes the first one the proxy has: Chrome goes through the SOCKS endpoint when the proxy has one and falls back to HTTP, Claude Code always uses HTTP. `--via <type>` overrides the choice for one launch, so `prx run --via http chrome` sends Chrome through the HTTP endpoint. When the preset cannot use the type, or the proxy has no endpoint of a type the preset can use, the launch fails with `endpoint_missing` and exit 2 before anything starts.
@@ -96,6 +100,15 @@ Endpoint socks5://127.0.0.1:1080 is not live: no response from the proxy before 
 Logs are in /Users/me/.local/state/prx
 ```
 
+On a terminal the same report is a block: the headline carries a green, yellow or dim symbol for live, running but not live, and not running, then one aligned row per endpoint, then the log directory as a link:
+
+```
+▲  Built-in proxy is running
+   http   127.0.0.1:8118  live      42 ms
+   socks  127.0.0.1:1080  not live  no response from the proxy before the timeout
+   logs   ~/.local/state/prx
+```
+
 ### `prx list`
 
 Shows the presets, whether each app is installed, its launch mode, and the endpoint types it can use, most preferred first:
@@ -115,7 +128,7 @@ Lists what it will remove, asks for confirmation, and then removes the binary, t
 
 ### `--json`
 
-`up`, `down`, `status`, `list`, `config`, and `run` accept `--json` for wrappers. In JSON mode a command prints exactly one JSON object to stdout, and for `run` the app's own output follows it. Exit codes are the same as in text mode.
+`up`, `down`, `status`, `list`, `config`, and `run` accept `--json` for wrappers. In JSON mode a command prints exactly one JSON object to stdout, and for `run` the app's own output follows it. Exit codes are the same as in text mode. An error is `{"error":{"code":...,"message":...}}`, with a `hint` field naming the next command when there is one; the message still contains the hint sentence, so a wrapper can show either.
 
 ```sh
 prx status --json
