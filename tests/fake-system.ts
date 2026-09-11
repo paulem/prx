@@ -1,3 +1,4 @@
+import type { Address, EndpointType, ProxyConfig } from "../src/config.ts";
 import type {
   LaunchRequest,
   PromptAnswer,
@@ -177,9 +178,16 @@ export function createFakeSystem(): FakeSystem {
   return fake;
 }
 
-export function writeFakeConfig(fake: FakeSystem, proxy: { host: string; port: number }): void {
-  fake.files.set(
-    FAKE_CONFIG_PATH,
-    JSON.stringify({ version: 1, proxy: { type: "http", host: proxy.host, port: proxy.port } }),
-  );
+export function writeFakeConfig(fake: FakeSystem, proxy: ProxyConfig): void {
+  fake.files.set(FAKE_CONFIG_PATH, JSON.stringify({ version: 1, proxy }));
+}
+
+/** An external proxy recording the given endpoints; a test proxy passes as an address */
+export function externalProxy(endpoints: Partial<Record<EndpointType, Address>>): ProxyConfig {
+  return {
+    source: "external",
+    endpoints: Object.fromEntries(
+      Object.entries(endpoints).map(([type, { host, port }]) => [type, { host, port }]),
+    ),
+  };
 }

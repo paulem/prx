@@ -1,6 +1,11 @@
 import { afterEach, beforeAll, describe, expect, test } from "vitest";
 import { runCli } from "../src/cli.ts";
-import { createFakeSystem, writeFakeConfig, type FakeSystem } from "./fake-system.ts";
+import {
+  createFakeSystem,
+  externalProxy,
+  writeFakeConfig,
+  type FakeSystem,
+} from "./fake-system.ts";
 import { startTestProxy, trustProbeTarget, type TestProxy } from "./test-proxy.ts";
 
 const CHROME_PATH = "/Applications/Google Chrome.app";
@@ -18,7 +23,7 @@ afterEach(async () => {
 async function withLiveProxy(): Promise<FakeSystem> {
   proxy = await startTestProxy("live");
   const fake = createFakeSystem();
-  writeFakeConfig(fake, proxy);
+  writeFakeConfig(fake, externalProxy({ http: proxy }));
   fake.applications.set("Google Chrome", CHROME_PATH);
   return fake;
 }
@@ -39,7 +44,7 @@ describe("prx run chrome", () => {
     expect(fake.spawns).toEqual([]);
     expect(fake.stdout()).toBe("");
     expect(fake.stderr()).toMatch(
-      /^prx: proxy http:\/\/127\.0\.0\.1:\d+ is live \(\d+ ms\), launching chrome\n$/,
+      /^prx: http endpoint http:\/\/127\.0\.0\.1:\d+ is live \(\d+ ms\), launching chrome\n$/,
     );
   });
 
@@ -68,7 +73,7 @@ describe("prx run chrome", () => {
     );
   });
 
-  test("--json reports the launch with preset, proxy and latency and no PID", async () => {
+  test("--json reports the launch with preset, endpoint and latency and no PID", async () => {
     const fake = await withLiveProxy();
 
     const exitCode = await runCli(["run", "--json", "chrome"], fake.system);
@@ -76,7 +81,7 @@ describe("prx run chrome", () => {
     expect(exitCode).toBe(0);
     expect(JSON.parse(fake.stdout())).toEqual({
       preset: "chrome",
-      proxy: { type: "http", host: "127.0.0.1", port: proxy?.port },
+      endpoint: { type: "http", host: "127.0.0.1", port: proxy?.port },
       latencyMs: expect.any(Number),
     });
     expect(fake.stderr()).toBe("");

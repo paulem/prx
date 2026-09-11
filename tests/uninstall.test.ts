@@ -3,6 +3,7 @@ import { runCli } from "../src/cli.ts";
 import {
   CANCEL,
   createFakeSystem,
+  externalProxy,
   FAKE_CONFIG_PATH,
   writeFakeConfig,
   type FakeSystem,
@@ -17,7 +18,7 @@ const ZSHRC_AFTER = 'export EDITOR="vim"\n';
 function installedFake(): FakeSystem {
   const fake = createFakeSystem();
   fake.files.set(BINARY, "#!/usr/bin/env node\n");
-  writeFakeConfig(fake, { host: "127.0.0.1", port: 8118 });
+  writeFakeConfig(fake, externalProxy({ http: { host: "127.0.0.1", port: 8118 } }));
   fake.files.set(ZSHRC, `${ZSHRC_BEFORE}\n${PATH_BLOCK}${ZSHRC_AFTER}`);
   return fake;
 }
@@ -108,7 +109,7 @@ describe("prx uninstall", () => {
 
   test("lists only what exists", async () => {
     const fake = createFakeSystem();
-    writeFakeConfig(fake, { host: "127.0.0.1", port: 8118 });
+    writeFakeConfig(fake, externalProxy({ http: { host: "127.0.0.1", port: 8118 } }));
     fake.answers.push(true);
 
     await runCli(["uninstall"], fake.system);

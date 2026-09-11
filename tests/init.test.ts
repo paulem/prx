@@ -3,6 +3,7 @@ import { runCli } from "../src/cli.ts";
 import {
   CANCEL,
   createFakeSystem,
+  externalProxy,
   FAKE_CONFIG_PATH,
   USE_DEFAULT,
   writeFakeConfig,
@@ -14,38 +15,52 @@ beforeAll(() => {
   trustProbeTarget();
 });
 
-let proxy: TestProxy | undefined;
+const proxies: TestProxy[] = [];
 afterEach(async () => {
-  await proxy?.close();
-  proxy = undefined;
+  await Promise.all(proxies.splice(0).map((proxy) => proxy.close()));
 });
+
+async function testProxy(mode: Parameters<typeof startTestProxy>[0]): Promise<TestProxy> {
+  const proxy = await startTestProxy(mode);
+  proxies.push(proxy);
+  return proxy;
+}
+
+async function closedPort(): Promise<TestProxy> {
+  const proxy = await startTestProxy("live");
+  await proxy.close();
+  return proxy;
+}
 
 function savedConfig(fake: FakeSystem): unknown {
   const text = fake.files.get(FAKE_CONFIG_PATH);
   return text === undefined ? undefined : JSON.parse(text);
 }
 
-describe("prx init", () => {
-  test("walks through type and address, probes, saves and lists the presets", async () => {
-    proxy = await startTestProxy("live");
+function questionMessages(fake: FakeSystem): string[] {
+  return fake.questions.map((question) => question.message);
+}
+
+describe("prx init with an external proxy", () => {
+  test("records an HTTP endpoint, probes it, saves and lists the presets", async () => {
+    const http = await testProxy("live");
     const fake = createFakeSystem();
     fake.onPath.set("claude", "/home/test/.local/bin/claude");
-    fake.answers.push("http", `127.0.0.1:${proxy.port}`);
+    fake.answers.push("external", true, `127.0.0.1:${http.port}`, false);
 
     const exitCode = await runCli(["init"], fake.system);
 
     expect(exitCode).toBe(0);
-    expect(savedConfig(fake)).toEqual({
-      version: 1,
-      proxy: { type: "http", host: "127.0.0.1", port: proxy.port },
-    });
-    expect(fake.questions.map((question) => question.message)).toEqual([
-      "Proxy type",
-      "Proxy address (host:port or http://host:port)",
+    expect(savedConfig(fake)).toEqual({ version: 1, proxy: externalProxy({ http }) });
+    expect(questionMessages(fake)).toEqual([
+      "Proxy source",
+      "Record an HTTP endpoint?",
+      "HTTP endpoint (host:port or http://host:port)",
+      "Record a SOCKS endpoint?",
     ]);
     expect(fake.stdout()).toMatch(
       new RegExp(
-        `^Proxy http://127\\.0\\.0\\.1:${proxy.port} is live \\(\\d+ ms\\)\n` +
+        `^Endpoint http://127\\.0\\.0\\.1:${http.port} is live \\(\\d+ ms\\)\n` +
           `Saved config to ${FAKE_CONFIG_PATH}\n` +
           "claude  found    attached\nchrome  missing  detached\n$",
       ),
@@ -53,49 +68,116 @@ describe("prx init", () => {
     expect(fake.stderr()).toBe("");
   });
 
-  test("offers only the HTTP proxy type", async () => {
+  test("offers the external source and defaults to recording only an HTTP endpoint", async () => {
     const fake = createFakeSystem();
-    fake.answers.push(CANCEL);
+    fake.answers.push("external", CANCEL);
 
     await runCli(["init"], fake.system);
 
     expect(fake.questions[0]).toEqual({
       kind: "select",
-      message: "Proxy type",
-      options: [{ value: "http", label: "HTTP proxy, no auth" }],
+      message: "Proxy source",
+      options: [{ value: "external", label: "External proxy, something else runs it" }],
+    });
+    expect(fake.questions[1]).toEqual({
+      kind: "confirm",
+      message: "Record an HTTP endpoint?",
+      initialValue: true,
     });
   });
 
-  test("accepts the http://host:port form", async () => {
-    proxy = await startTestProxy("live");
+  test("records both endpoints and probes each one", async () => {
+    const http = await testProxy("live");
+    const socks = await testProxy("socks");
     const fake = createFakeSystem();
-    fake.answers.push("http", `http://localhost:${proxy.port}`);
+    fake.answers.push("external", true, `127.0.0.1:${http.port}`, true, `127.0.0.1:${socks.port}`);
+
+    const exitCode = await runCli(["init"], fake.system);
+
+    expect(exitCode).toBe(0);
+    expect(savedConfig(fake)).toEqual({ version: 1, proxy: externalProxy({ http, socks }) });
+    expect(fake.questions[4]).toMatchObject({
+      kind: "text",
+      message: "SOCKS endpoint (host:port or socks5://host:port)",
+      initialValue: "127.0.0.1:1080",
+    });
+    expect(fake.stdout()).toMatch(
+      new RegExp(
+        `^Endpoint http://127\\.0\\.0\\.1:${http.port} is live \\(\\d+ ms\\)\n` +
+          `Endpoint socks5://127\\.0\\.0\\.1:${socks.port} is live \\(\\d+ ms\\)\n`,
+      ),
+    );
+  });
+
+  test("records only a SOCKS endpoint", async () => {
+    const socks = await testProxy("socks");
+    const fake = createFakeSystem();
+    fake.answers.push("external", false, true, `socks5://127.0.0.1:${socks.port}`);
+
+    const exitCode = await runCli(["init"], fake.system);
+
+    expect(exitCode).toBe(0);
+    expect(savedConfig(fake)).toEqual({ version: 1, proxy: externalProxy({ socks }) });
+  });
+
+  test("refuses to save no endpoint and asks again", async () => {
+    const http = await testProxy("live");
+    const fake = createFakeSystem();
+    fake.answers.push("external", false, false, true, `127.0.0.1:${http.port}`, false);
+
+    const exitCode = await runCli(["init"], fake.system);
+
+    expect(exitCode).toBe(0);
+    expect(fake.stdout()).toMatch(/^Record at least one endpoint\n/);
+    expect(questionMessages(fake)).toEqual([
+      "Proxy source",
+      "Record an HTTP endpoint?",
+      "Record a SOCKS endpoint?",
+      "Record an HTTP endpoint?",
+      "HTTP endpoint (host:port or http://host:port)",
+      "Record a SOCKS endpoint?",
+    ]);
+    expect(savedConfig(fake)).toEqual({ version: 1, proxy: externalProxy({ http }) });
+  });
+
+  test("accepts the http://host:port form", async () => {
+    const http = await testProxy("live");
+    const fake = createFakeSystem();
+    fake.answers.push("external", true, `http://localhost:${http.port}`, false);
 
     await runCli(["init"], fake.system);
 
     expect(savedConfig(fake)).toEqual({
       version: 1,
-      proxy: { type: "http", host: "localhost", port: proxy.port },
+      proxy: { source: "external", endpoints: { http: { host: "localhost", port: http.port } } },
     });
   });
 
-  test("defaults the address to 127.0.0.1:8118", async () => {
+  test("defaults the HTTP address to 127.0.0.1:8118", async () => {
     const fake = createFakeSystem();
-    fake.answers.push("http", USE_DEFAULT, true);
+    fake.answers.push("external", true, USE_DEFAULT, false, true);
 
     await runCli(["init"], fake.system, { probeTimeoutMs: 300 });
 
-    expect(fake.questions[1]).toMatchObject({ kind: "text", initialValue: "127.0.0.1:8118" });
+    expect(fake.questions[2]).toMatchObject({ kind: "text", initialValue: "127.0.0.1:8118" });
     expect(savedConfig(fake)).toEqual({
       version: 1,
-      proxy: { type: "http", host: "127.0.0.1", port: 8118 },
+      proxy: { source: "external", endpoints: { http: { host: "127.0.0.1", port: 8118 } } },
     });
   });
 
   test("rejects a bad address with a clear message and asks again", async () => {
-    proxy = await startTestProxy("live");
+    const http = await testProxy("live");
     const fake = createFakeSystem();
-    fake.answers.push("http", "not an address", "127.0.0.1:99999", `127.0.0.1:${proxy.port}`);
+    fake.answers.push(
+      "external",
+      true,
+      "not an address",
+      "127.0.0.1:99999",
+      `socks5://127.0.0.1:${http.port}`,
+      `127.0.0.1:${http.port}`,
+      false,
+    );
 
     const exitCode = await runCli(["init"], fake.system);
 
@@ -103,34 +185,42 @@ describe("prx init", () => {
     expect(fake.rejectedInputs).toEqual([
       { input: "not an address", message: "Enter host:port or http://host:port" },
       { input: "127.0.0.1:99999", message: "Port must be between 1 and 65535" },
+      { input: `socks5://127.0.0.1:${http.port}`, message: "Enter host:port or http://host:port" },
     ]);
-    expect(savedConfig(fake)).toMatchObject({ proxy: { port: proxy.port } });
+    expect(savedConfig(fake)).toEqual({ version: 1, proxy: externalProxy({ http }) });
   });
 
-  test("asks whether to save anyway when the probe fails, and saves on yes", async () => {
-    const closed = await startTestProxy("live");
-    await closed.close();
+  test("asks whether to save anyway when a probe fails, and saves on yes", async () => {
+    const http = await testProxy("live");
+    const socks = await closedPort();
     const fake = createFakeSystem();
-    fake.answers.push("http", `127.0.0.1:${closed.port}`, true);
+    fake.answers.push(
+      "external",
+      true,
+      `127.0.0.1:${http.port}`,
+      true,
+      `127.0.0.1:${socks.port}`,
+      true,
+    );
 
     const exitCode = await runCli(["init"], fake.system);
 
     expect(exitCode).toBe(0);
     expect(fake.stdout()).toContain(
-      `Proxy http://127.0.0.1:${closed.port} is not live: connection refused (ECONNREFUSED)\n`,
+      `Endpoint socks5://127.0.0.1:${socks.port} is not live: connection refused (ECONNREFUSED)\n`,
     );
-    expect(fake.questions[2]).toMatchObject({
+    expect(fake.questions[5]).toMatchObject({
       kind: "confirm",
       message: "Save the config anyway?",
+      initialValue: false,
     });
-    expect(savedConfig(fake)).toMatchObject({ proxy: { port: closed.port } });
+    expect(savedConfig(fake)).toEqual({ version: 1, proxy: externalProxy({ http, socks }) });
   });
 
   test("declining to save anyway exits without writing", async () => {
-    const closed = await startTestProxy("live");
-    await closed.close();
+    const http = await closedPort();
     const fake = createFakeSystem();
-    fake.answers.push("http", `127.0.0.1:${closed.port}`, false);
+    fake.answers.push("external", true, `127.0.0.1:${http.port}`, false, false);
 
     const exitCode = await runCli(["init"], fake.system);
 
@@ -141,7 +231,7 @@ describe("prx init", () => {
 
   test("cancelling a prompt exits without writing", async () => {
     const fake = createFakeSystem();
-    fake.answers.push("http", CANCEL);
+    fake.answers.push("external", true, CANCEL);
 
     const exitCode = await runCli(["init"], fake.system);
 
@@ -151,28 +241,28 @@ describe("prx init", () => {
   });
 
   test("re-running replaces the existing config", async () => {
-    proxy = await startTestProxy("live");
+    const http = await testProxy("live");
     const fake = createFakeSystem();
-    writeFakeConfig(fake, { host: "10.0.0.1", port: 3128 });
-    fake.answers.push("http", `127.0.0.1:${proxy.port}`);
+    writeFakeConfig(fake, externalProxy({ http: { host: "10.0.0.1", port: 3128 } }));
+    fake.answers.push("external", true, `127.0.0.1:${http.port}`, false);
 
     await runCli(["init"], fake.system);
 
-    expect(savedConfig(fake)).toMatchObject({ proxy: { host: "127.0.0.1", port: proxy.port } });
+    expect(savedConfig(fake)).toEqual({ version: 1, proxy: externalProxy({ http }) });
   });
 });
 
 describe("prx run on a first run", () => {
   test("starts the wizard when there is no config, then launches", async () => {
-    proxy = await startTestProxy("live");
+    const http = await testProxy("live");
     const fake = createFakeSystem();
     fake.onPath.set("claude", "/home/test/.local/bin/claude");
-    fake.answers.push("http", `127.0.0.1:${proxy.port}`);
+    fake.answers.push("external", true, `127.0.0.1:${http.port}`, false);
 
     const exitCode = await runCli(["run", "claude", "--resume"], fake.system);
 
     expect(exitCode).toBe(0);
-    expect(savedConfig(fake)).toMatchObject({ proxy: { port: proxy.port } });
+    expect(savedConfig(fake)).toEqual({ version: 1, proxy: externalProxy({ http }) });
     expect(fake.spawns).toHaveLength(1);
     expect(fake.spawns[0]?.args).toEqual(["--resume"]);
   });

@@ -1,6 +1,11 @@
 import { afterEach, beforeAll, describe, expect, test } from "vitest";
 import { runCli } from "../src/cli.ts";
-import { createFakeSystem, writeFakeConfig, type FakeSystem } from "./fake-system.ts";
+import {
+  createFakeSystem,
+  externalProxy,
+  writeFakeConfig,
+  type FakeSystem,
+} from "./fake-system.ts";
 import { startTestProxy, trustProbeTarget, type TestProxy } from "./test-proxy.ts";
 
 const CLAUDE_PATH = "/home/test/.local/bin/claude";
@@ -18,7 +23,7 @@ afterEach(async () => {
 async function withLiveProxy(): Promise<FakeSystem> {
   proxy = await startTestProxy("live");
   const fake = createFakeSystem();
-  writeFakeConfig(fake, proxy);
+  writeFakeConfig(fake, externalProxy({ http: proxy }));
   fake.onPath.set("claude", CLAUDE_PATH);
   return fake;
 }
@@ -47,7 +52,7 @@ describe("prx run claude", () => {
     ]);
     expect(fake.stdout()).toBe("");
     expect(fake.stderr()).toMatch(
-      /^prx: proxy http:\/\/127\.0\.0\.1:\d+ is live \(\d+ ms\), launching claude\n$/,
+      /^prx: http endpoint http:\/\/127\.0\.0\.1:\d+ is live \(\d+ ms\), launching claude\n$/,
     );
   });
 
@@ -80,7 +85,7 @@ describe("prx run claude", () => {
 
   test("--no-check launches without probing", async () => {
     const fake = createFakeSystem();
-    writeFakeConfig(fake, { host: "127.0.0.1", port: 1 });
+    writeFakeConfig(fake, externalProxy({ http: { host: "127.0.0.1", port: 1 } }));
     fake.onPath.set("claude", CLAUDE_PATH);
 
     const exitCode = await runCli(["run", "--no-check", "claude"], fake.system);
@@ -88,7 +93,7 @@ describe("prx run claude", () => {
     expect(exitCode).toBe(0);
     expect(fake.spawns).toHaveLength(1);
     expect(fake.stderr()).toBe(
-      "prx: proxy http://127.0.0.1:1 not probed (--no-check), launching claude\n",
+      "prx: http endpoint http://127.0.0.1:1 not probed (--no-check), launching claude\n",
     );
   });
 
@@ -96,7 +101,7 @@ describe("prx run claude", () => {
     const closed = await startTestProxy("live");
     await closed.close();
     const fake = createFakeSystem();
-    writeFakeConfig(fake, closed);
+    writeFakeConfig(fake, externalProxy({ http: closed }));
     fake.onPath.set("claude", CLAUDE_PATH);
 
     const exitCode = await runCli(["run", "claude"], fake.system);
@@ -104,7 +109,7 @@ describe("prx run claude", () => {
     expect(exitCode).toBe(1);
     expect(fake.spawns).toEqual([]);
     expect(fake.stderr()).toBe(
-      `Proxy http://127.0.0.1:${closed.port} is not live: connection refused (ECONNREFUSED)\n`,
+      `Endpoint http://127.0.0.1:${closed.port} is not live: connection refused (ECONNREFUSED)\n`,
     );
   });
 
@@ -116,7 +121,7 @@ describe("prx run claude", () => {
     expect(exitCode).toBe(0);
     expect(JSON.parse(fake.stdout())).toEqual({
       preset: "claude",
-      proxy: { type: "http", host: "127.0.0.1", port: proxy?.port },
+      endpoint: { type: "http", host: "127.0.0.1", port: proxy?.port },
       latencyMs: expect.any(Number),
     });
     expect(fake.stderr()).toBe("");

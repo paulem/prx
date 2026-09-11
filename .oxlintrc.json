@@ -6,6 +6,9 @@
     "suspicious": "error",
     "perf": "warn"
   },
+  "rules": {
+    "no-await-in-loop": "off"
+  },
   "env": {
     "node": true
   },

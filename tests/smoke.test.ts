@@ -41,7 +41,10 @@ async function installedHome(proxy: TestProxy): Promise<InstalledHome> {
   await mkdir(join(home, ".config", "prx"), { recursive: true });
   await writeFile(
     join(home, ".config", "prx", "config.json"),
-    JSON.stringify({ version: 1, proxy: { type: "http", host: proxy.host, port: proxy.port } }),
+    JSON.stringify({
+      version: 1,
+      proxy: { source: "external", endpoints: { http: { host: proxy.host, port: proxy.port } } },
+    }),
   );
   return { home, binDir };
 }
@@ -85,7 +88,7 @@ describe("prx run claude through the built bundle", () => {
         "no_proxy=localhost,127.0.0.1,::1\n",
     );
     expect(result.stderr).toMatch(
-      /^prx: proxy http:\/\/127\.0\.0\.1:\d+ is live \(\d+ ms\), launching claude\n$/,
+      /^prx: http endpoint http:\/\/127\.0\.0\.1:\d+ is live \(\d+ ms\), launching claude\n$/,
     );
   });
 

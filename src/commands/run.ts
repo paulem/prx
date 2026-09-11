@@ -1,4 +1,4 @@
-import { proxyUrl, readConfig, type Config, type ProxyConfig } from "../config.ts";
+import { endpointUrl, findEndpoint, readConfig, type Config, type Endpoint } from "../config.ts";
 import { PrxError } from "../errors.ts";
 import { argsInjection, envInjection, exitCodeFromOutcome, macOpenLaunch } from "../launch.ts";
 import type { Reporter } from "../output.ts";
@@ -29,7 +29,13 @@ export async function runRun(command: RunCommand): Promise<number> {
   }
 
   const config = await readConfigOrInit(command);
-  const proxy = config.proxy;
+  const endpoint = findEndpoint(config.proxy, "http");
+  if (endpoint === undefined) {
+    throw new PrxError(
+      "endpoint_missing",
+      `The proxy has no http endpoint, which ${preset.name} needs. Run prx init to record one.`,
+    );
+  }
 
   const appPath = await locateApp(system, preset.app);
   if (appPath === undefined) {
@@ -48,17 +54,19 @@ export async function runRun(command: RunCommand): Promise<number> {
     }
   }
 
-  const latencyMs = await probeBeforeLaunch(command, preset, proxy);
+  const latencyMs = await probeBeforeLaunch(command, preset, endpoint);
 
   if (json) {
-    reporter.result("", { preset: preset.name, proxy, latencyMs });
+    reporter.result("", { preset: preset.name, endpoint, latencyMs });
   } else {
     const probeSummary =
       latencyMs === null ? "not probed (--no-check)" : `is live (${latencyMs} ms)`;
-    system.writeStderr(`prx: proxy ${proxyUrl(proxy)} ${probeSummary}, launching ${preset.name}\n`);
+    system.writeStderr(
+      `prx: ${endpoint.type} endpoint ${endpointUrl(endpoint)} ${probeSummary}, launching ${preset.name}\n`,
+    );
   }
 
-  const injected = inject(preset, proxy);
+  const injected = inject(preset, endpoint);
   if (preset.launch === "detached") {
     await system.launchDetached(macOpenLaunch(appPath, [...injected.args, ...passthrough]));
     return 0;
@@ -77,11 +85,11 @@ interface Injected {
   args: string[];
 }
 
-function inject(preset: Preset, proxy: ProxyConfig): Injected {
+function inject(preset: Preset, endpoint: Endpoint): Injected {
   if (preset.injection === "env") {
-    return { env: envInjection(proxy), args: [] };
+    return { env: envInjection(endpoint), args: [] };
   }
-  return { env: {}, args: argsInjection(proxy) };
+  return { env: {}, args: argsInjection(endpoint) };
 }
 
 // A first run is never a dead end: without a config the wizard runs first, unless a wrapper
@@ -100,17 +108,20 @@ async function readConfigOrInit(command: RunCommand): Promise<Config> {
 async function probeBeforeLaunch(
   command: RunCommand,
   preset: Preset,
-  proxy: ProxyConfig,
+  endpoint: Endpoint,
 ): Promise<number | null> {
   if (!command.check) {
     return null;
   }
-  const result = await probe(proxy, {
+  const result = await probe(endpoint, {
     url: preset.probeUrl ?? DEFAULT_PROBE_URL,
     timeoutMs: command.probeTimeoutMs,
   });
   if (!result.live) {
-    throw new PrxError("proxy_not_live", `Proxy ${proxyUrl(proxy)} is not live: ${result.message}`);
+    throw new PrxError(
+      "proxy_not_live",
+      `Endpoint ${endpointUrl(endpoint)} is not live: ${result.message}`,
+    );
   }
   return result.latencyMs;
 }

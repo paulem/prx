@@ -1,10 +1,10 @@
 import { Command, CommanderError } from "commander";
 import pkg from "../package.json" with { type: "json" };
-import { runCheck } from "./commands/check.ts";
 import { runConfig } from "./commands/config.ts";
 import { runInit } from "./commands/init.ts";
 import { runList } from "./commands/list.ts";
 import { runRun } from "./commands/run.ts";
+import { runStatus } from "./commands/status.ts";
 import { runUninstall } from "./commands/uninstall.ts";
 import { PrxError } from "./errors.ts";
 import { createReporter, type Reporter } from "./output.ts";
@@ -94,12 +94,12 @@ export async function runCli(
     });
 
   program
-    .command("check")
-    .description("Probe the proxy and report whether it is live")
+    .command("status")
+    .description("Probe each endpoint of the proxy and report whether it is live")
     .option("--json", "Print the result as one JSON object")
     .action(async (commandOptions: JsonOption) => {
       const reporter = createReporter(system, commandOptions.json === true);
-      await report(reporter, () => runCheck({ system, reporter, probeTimeoutMs }));
+      await report(reporter, () => runStatus({ system, reporter, probeTimeoutMs }));
     });
 
   program

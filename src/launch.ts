@@ -1,5 +1,5 @@
 import { constants } from "node:os";
-import { proxyUrl, type ProxyConfig } from "./config.ts";
+import { endpointUrl, type Endpoint } from "./config.ts";
 import type { LaunchRequest, SpawnOutcome } from "./system.ts";
 
 /** Hosts an env-injected app reaches directly, so local servers keep working */
@@ -7,8 +7,8 @@ export const BYPASS_HOSTS = "localhost,127.0.0.1,::1";
 
 const SIGNAL_EXIT_CODE_BASE = 128;
 
-export function envInjection(proxy: ProxyConfig): Record<string, string> {
-  const url = proxyUrl(proxy);
+export function envInjection(endpoint: Endpoint): Record<string, string> {
+  const url = endpointUrl(endpoint);
   return {
     HTTP_PROXY: url,
     HTTPS_PROXY: url,
@@ -19,8 +19,8 @@ export function envInjection(proxy: ProxyConfig): Record<string, string> {
   };
 }
 
-export function argsInjection(proxy: ProxyConfig): string[] {
-  return [`--proxy-server=${proxyUrl(proxy)}`];
+export function argsInjection(endpoint: Endpoint): string[] {
+  return [`--proxy-server=${endpointUrl(endpoint)}`];
 }
 
 /** Starts a new instance of a macOS app bundle with arguments, without waiting for it */
