@@ -119,7 +119,7 @@ export interface SystemAdapter {
   launchDetached: (request: LaunchRequest) => Promise<void>;
   /** Whether an app from an Applications folder has a running instance */
   isApplicationRunning: (name: string) => Promise<boolean>;
-  /** Starts a process that outlives prx, with its output going to the log file, and resolves to its pid */
+  /** Starts a process that outlives prx, with its output replacing the log file, and resolves to its pid */
   startBackground: (request: BackgroundRequest) => Promise<number>;
   isProcessAlive: (pid: number) => Promise<boolean>;
   /** Sends a signal; a process that is already gone is not an error */
@@ -235,7 +235,7 @@ export function createNodeSystemAdapter(env: NodeJS.ProcessEnv = process.env): S
     },
     async startBackground(request) {
       await mkdir(dirname(request.logPath), { recursive: true });
-      const log = await open(request.logPath, "a");
+      const log = await open(request.logPath, "w");
       try {
         return await new Promise<number>((resolve, reject) => {
           const child = spawn(request.command, request.args, {

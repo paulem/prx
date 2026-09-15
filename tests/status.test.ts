@@ -190,6 +190,67 @@ describe("prx status on a built-in proxy", () => {
     );
   });
 
+  test("explains a dead tunnel from the autossh log and says what to do about the key", async () => {
+    const http = await pool.closed();
+    const socks = await pool.closed();
+    const fake = createFakeSystem();
+    writeFakeConfig(fake, builtInProxy({ socksPort: socks.port, httpPort: http.port }));
+    markRunning(fake);
+    fake.files.set(
+      `${FAKE_STATE_DIR}/autossh.log`,
+      "me@box.example: Permission denied (publickey).\nme@box.example: Permission denied (publickey).\n\n",
+    );
+
+    const exitCode = await statusOf(fake);
+
+    expect(exitCode).toBe(1);
+    expect(fake.stdout()).toBe(
+      "Built-in proxy is running\n" +
+        `Endpoint http://127.0.0.1:${http.port} is not live: connection refused (ECONNREFUSED)\n` +
+        `Endpoint socks5://127.0.0.1:${socks.port} is not live: connection refused (ECONNREFUSED)\n` +
+        "Tunnel: me@box.example: Permission denied (publickey).\n" +
+        `Logs are in ${FAKE_STATE_DIR}\n` +
+        "Run prx init to pick a key file, or add one to ssh-agent with: ssh-add <path>\n",
+    );
+  });
+
+  test("an unrecognised tunnel error is shown without a hint, in JSON too", async () => {
+    const http = await pool.closed();
+    const socks = await pool.closed();
+    const fake = createFakeSystem();
+    writeFakeConfig(fake, builtInProxy({ socksPort: socks.port, httpPort: http.port }));
+    markRunning(fake);
+    fake.files.set(
+      `${FAKE_STATE_DIR}/autossh.log`,
+      "kex_exchange_identification: read: Connection reset\n",
+    );
+
+    const exitCode = await statusOf(fake, ["--json"]);
+
+    expect(exitCode).toBe(1);
+    expect(JSON.parse(fake.stdout())).toMatchObject({
+      running: true,
+      tunnelFailure: { message: "kex_exchange_identification: read: Connection reset" },
+    });
+    expect(JSON.parse(fake.stdout()).tunnelFailure).not.toHaveProperty("hint");
+  });
+
+  test("a live proxy never reads the tunnel log", async () => {
+    const http = await pool.open("live");
+    const socks = await pool.open("socks");
+    const fake = createFakeSystem();
+    writeFakeConfig(fake, builtInProxy({ socksPort: socks.port, httpPort: http.port }));
+    markRunning(fake);
+    fake.files.set(
+      `${FAKE_STATE_DIR}/autossh.log`,
+      "me@box.example: Permission denied (publickey).\n",
+    );
+
+    await statusOf(fake, ["--json"]);
+
+    expect(JSON.parse(fake.stdout())).not.toHaveProperty("tunnelFailure");
+  });
+
   test("a stopped proxy is reported as not running without a log hint", async () => {
     const http = await pool.closed();
     const socks = await pool.closed();

@@ -1,4 +1,4 @@
-import { isBuiltInProxyRunning, startBuiltInProxy } from "../builtin-proxy.ts";
+import { isBuiltInProxyRunning, startBuiltInProxy, type TunnelFailure } from "../builtin-proxy.ts";
 import {
   proxyEndpoints,
   readConfig,
@@ -15,10 +15,12 @@ import type { Block } from "../style.ts";
 import {
   allLive,
   builtInBlock,
+  builtInReportJson,
   builtInView,
-  endpointReportsJson,
+  explainNotLive,
   formatBuiltInReport,
   probeEndpointsWith,
+  type BuiltInReport,
   type EndpointReport,
 } from "./status.ts";
 
@@ -32,6 +34,7 @@ export interface UpCommand {
 export interface UpReport {
   started: boolean;
   reports: EndpointReport[];
+  tunnelFailure: TunnelFailure | undefined;
 }
 
 export const STARTING_MESSAGE = "Starting the built-in proxy";
@@ -45,7 +48,7 @@ export async function runUp(command: UpCommand): Promise<number> {
     source: "built-in",
     running: true,
     started: report.started,
-    endpoints: endpointReportsJson(report.reports),
+    ...builtInReportJson(builtInReport(report)),
   });
   return allLive(report.reports) ? 0 : 1;
 }
@@ -73,23 +76,29 @@ export async function bringUp(
       }),
     ),
   );
-  return { started, reports };
+  const tunnelFailure = await explainNotLive(system, proxy, true, reports);
+  return { started, reports, tunnelFailure };
 }
 
 export function upView(system: SystemAdapter, report: UpReport): View {
-  return builtInView(system, upHeadline(report), true, report.reports);
+  return builtInView(system, builtInReport(report));
 }
 
 export function upBlock(system: SystemAdapter, report: UpReport): Block {
-  return builtInBlock(system, upHeadline(report), true, report.reports);
+  return builtInBlock(system, builtInReport(report));
 }
 
 export function formatUpReport(system: SystemAdapter, report: UpReport): string {
-  return formatBuiltInReport(system, upHeadline(report), true, report.reports);
+  return formatBuiltInReport(system, builtInReport(report));
 }
 
-function upHeadline(report: UpReport): string {
-  return report.started ? "Built-in proxy started" : "Built-in proxy is already running";
+function builtInReport(report: UpReport): BuiltInReport {
+  return {
+    headline: report.started ? "Built-in proxy started" : "Built-in proxy is already running",
+    running: true,
+    reports: report.reports,
+    tunnelFailure: report.tunnelFailure,
+  };
 }
 
 export function requireBuiltIn(config: Config, action: "start" | "stop"): BuiltInProxyConfig {

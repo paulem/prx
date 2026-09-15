@@ -48,6 +48,10 @@ _Avoid_: health check, ping, liveness check, connectivity test
 The state of an endpoint whose probe succeeded within the timeout.
 _Avoid_: up, healthy, reachable, working
 
+**Tunnel failure**:
+The last line ssh wrote to the autossh log, reported when the proxy is running but an endpoint is not live.
+_Avoid_: ssh error, log tail, diagnosis
+
 **Injection**:
 The way an endpoint is handed to an app: environment variables or command-line arguments.
 _Avoid_: proxy mode, method, strategy

@@ -1,8 +1,9 @@
-import { isBuiltInProxyRunning } from "../builtin-proxy.ts";
+import { isBuiltInProxyRunning, readTunnelFailure, type TunnelFailure } from "../builtin-proxy.ts";
 import {
   endpointUrl,
   proxyEndpoints,
   readConfig,
+  type BuiltInProxyConfig,
   type Endpoint,
   type ProxyConfig,
 } from "../config.ts";
@@ -58,48 +59,89 @@ export async function runStatus({
     Promise.all([isBuiltInProxyRunning(system), probeEndpoints(proxy, probeTimeoutMs)]),
   );
   const headline = running ? "Built-in proxy is running" : "Built-in proxy is not running";
-  reporter.result(builtInView(system, headline, running, reports), {
+  const report: BuiltInReport = {
+    headline,
+    running,
+    reports,
+    tunnelFailure: await explainNotLive(system, proxy, running, reports),
+  };
+  reporter.result(builtInView(system, report), {
     source: "built-in",
     running,
-    endpoints: endpointReportsJson(reports),
+    ...builtInReportJson(report),
   });
   return allLive(reports) ? 0 : 1;
 }
 
-/** Both renderings of a built-in proxy report under the given headline */
-export function builtInView(
+/** What status and up have to say about a built-in proxy */
+export interface BuiltInReport {
+  headline: string;
+  running: boolean;
+  reports: EndpointReport[];
+  /** Why the tunnel is failing, when the proxy runs but an endpoint is not live */
+  tunnelFailure: TunnelFailure | undefined;
+}
+
+/** The autossh log only explains a proxy that runs while an endpoint is not live */
+export function explainNotLive(
   system: SystemAdapter,
-  headline: string,
+  proxy: BuiltInProxyConfig,
   running: boolean,
   reports: EndpointReport[],
-): View {
+): Promise<TunnelFailure | undefined> {
+  if (!running || allLive(reports)) {
+    return Promise.resolve(undefined);
+  }
+  return readTunnelFailure(system, proxy);
+}
+
+/** The endpoints and, when there is one, the tunnel failure, for JSON output */
+export function builtInReportJson(report: BuiltInReport): Record<string, unknown> {
+  const { tunnelFailure } = report;
+  if (tunnelFailure === undefined) {
+    return { endpoints: endpointReportsJson(report.reports) };
+  }
+  const hint = tunnelFailure.hint === undefined ? {} : { hint: tunnelFailure.hint };
   return {
-    plain: formatBuiltInReport(system, headline, running, reports),
-    decorated: renderBlock(builtInBlock(system, headline, running, reports)),
+    endpoints: endpointReportsJson(report.reports),
+    tunnelFailure: { message: tunnelFailure.message, ...hint },
   };
 }
 
-/** The running line, one line per endpoint, and where to look when running but not live */
-export function formatBuiltInReport(
-  system: SystemAdapter,
-  headline: string,
-  running: boolean,
-  reports: EndpointReport[],
-): string {
-  const logHint = running && !allLive(reports) ? `Logs are in ${system.stateDir()}\n` : "";
-  return `${headline}\n${formatEndpointReports(reports)}${logHint}`;
+/** Both renderings of a built-in proxy report */
+export function builtInView(system: SystemAdapter, report: BuiltInReport): View {
+  return {
+    plain: formatBuiltInReport(system, report),
+    decorated: renderBlock(builtInBlock(system, report)),
+  };
+}
+
+/**
+ * The running line, one line per endpoint, then the tunnel failure, where to look and what
+ * to do when running but not live
+ */
+export function formatBuiltInReport(system: SystemAdapter, report: BuiltInReport): string {
+  const { headline, running, reports, tunnelFailure } = report;
+  const lines = [headline, ...reports.map(formatEndpointReport)];
+  if (running && !allLive(reports)) {
+    if (tunnelFailure !== undefined) {
+      lines.push(`Tunnel: ${tunnelFailure.message}`);
+    }
+    lines.push(`Logs are in ${system.stateDir()}`);
+    if (tunnelFailure?.hint !== undefined) {
+      lines.push(tunnelFailure.hint);
+    }
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 /**
  * The headline in the color of the proxy's state, then an aligned endpoint table, then the
- * log directory when the proxy runs but an endpoint is not live, or the way to start it
+ * tunnel failure and the log directory when the proxy runs but an endpoint is not live, or
+ * the way to start it; a hint, when there is one, stands apart under the table
  */
-export function builtInBlock(
-  system: SystemAdapter,
-  headline: string,
-  running: boolean,
-  reports: EndpointReport[],
-): Block {
+export function builtInBlock(system: SystemAdapter, report: BuiltInReport): Block {
+  const { headline, running, reports, tunnelFailure } = report;
   const rows = endpointRows(reports);
   if (!running) {
     return {
@@ -110,11 +152,18 @@ export function builtInBlock(
   if (allLive(reports)) {
     return { mark: symbol("success"), lines: [headline, ...table(rows)] };
   }
+  if (tunnelFailure !== undefined) {
+    rows.push([
+      { text: "tunnel", style: dim },
+      { text: tunnelFailure.message, style: red, span: true },
+    ]);
+  }
   rows.push([
     { text: "logs", style: dim },
     { text: pathLink(system.homeDir(), system.stateDir()), style: dim, span: true },
   ]);
-  return { mark: symbol("warn"), lines: [headline, ...table(rows)] };
+  const hint = tunnelFailure?.hint === undefined ? [] : [dim(tunnelFailure.hint)];
+  return { mark: symbol("warn"), lines: [headline, ...table(rows), ...hint] };
 }
 
 function externalBlock(reports: EndpointReport[]): Block {
@@ -170,13 +219,13 @@ export function allLive(reports: EndpointReport[]): boolean {
 export function formatEndpointReport({ endpoint, result }: EndpointReport): string {
   const url = endpointUrl(endpoint);
   if (result.live) {
-    return `Endpoint ${url} is live (${result.latencyMs} ms)\n`;
+    return `Endpoint ${url} is live (${result.latencyMs} ms)`;
   }
-  return `Endpoint ${url} is not live: ${result.message}\n`;
+  return `Endpoint ${url} is not live: ${result.message}`;
 }
 
 export function formatEndpointReports(reports: EndpointReport[]): string {
-  return reports.map(formatEndpointReport).join("");
+  return reports.map((report) => `${formatEndpointReport(report)}\n`).join("");
 }
 
 /** The per-endpoint results keyed by endpoint type, for JSON output */

@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { BUILT_IN_HOST, type BuiltInProxyConfig } from "./config.ts";
 import { PrxError } from "./errors.ts";
+import { tildePath } from "./style.ts";
 import type { BackgroundRequest, SystemAdapter } from "./system.ts";
 
 /** What prx runs for a built-in proxy, both required on PATH */
@@ -68,6 +69,56 @@ export async function startBuiltInProxy(
     env: {},
     logPath: paths.privoxy.log,
   });
+}
+
+/** The last error ssh wrote to the autossh log, with the next command when prx knows one */
+export interface TunnelFailure {
+  message: string;
+  hint: string | undefined;
+}
+
+/**
+ * Explains a running proxy whose endpoint is not live. The log holds only the current run, so
+ * its last line is what ssh most recently complained about
+ */
+export async function readTunnelFailure(
+  system: SystemAdapter,
+  proxy: BuiltInProxyConfig,
+): Promise<TunnelFailure | undefined> {
+  const log = await system.readTextFile(builtInProxyPaths(system).autossh.log);
+  const message = log
+    ?.split("\n")
+    .map((line) => line.trim())
+    .findLast((line) => line !== "");
+  if (message === undefined) {
+    return undefined;
+  }
+  return { message, hint: tunnelHint(system, proxy, message) };
+}
+
+const UNREACHABLE_HOST_PATTERN =
+  /Could not resolve hostname|Connection refused|Connection timed out|Network is unreachable|No route to host/;
+
+function tunnelHint(
+  system: SystemAdapter,
+  proxy: BuiltInProxyConfig,
+  message: string,
+): string | undefined {
+  const { tunnel } = proxy;
+  if (message.includes("Permission denied")) {
+    if (tunnel.identityFile === undefined) {
+      return "Run prx init to pick a key file, or add one to ssh-agent with: ssh-add <path>";
+    }
+    const key = tildePath(system.homeDir(), tunnel.identityFile);
+    return `Authorize ${key} on ${tunnel.host}, or run prx init to pick another key.`;
+  }
+  if (message.includes("Host key verification failed")) {
+    return `Remove the stale host key with: ssh-keygen -R ${tunnel.host}`;
+  }
+  if (UNREACHABLE_HOST_PATTERN.test(message)) {
+    return "Check the host and port with prx config, or run prx init to change them.";
+  }
+  return undefined;
 }
 
 /** Signals whatever is still running and removes the pid files; resolves to whether anything was running */

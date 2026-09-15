@@ -122,6 +122,28 @@ describe("prx run with a stopped built-in proxy", () => {
     );
   });
 
+  test("the not-live error carries the tunnel error and its hint", async () => {
+    const { fake, endpoints } = await withStoppedProxy();
+    await endpoints.http.close();
+    fake.files.set(
+      `${FAKE_STATE_DIR}/autossh.log`,
+      "me@box.example: Permission denied (publickey).\n",
+    );
+
+    const exitCode = await runCli(["run", "claude"], fake.system, {
+      probeTimeoutMs: 300,
+      startTimeoutMs: 300,
+    });
+
+    expect(exitCode).toBe(1);
+    expect(fake.stderr()).toBe(
+      "prx: started the built-in proxy\n" +
+        `Endpoint http://127.0.0.1:${endpoints.http.port} is not live: connection refused (ECONNREFUSED). ` +
+        "Tunnel: me@box.example: Permission denied (publickey). " +
+        "Run prx init to pick a key file, or add one to ssh-agent with: ssh-add <path>\n",
+    );
+  });
+
   test("--no-check still starts the proxy and launches without probing", async () => {
     const { fake, endpoints } = await withStoppedProxy();
     await endpoints.http.close();

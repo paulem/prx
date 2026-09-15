@@ -1,4 +1,4 @@
-import { isBuiltInProxyRunning, startBuiltInProxy } from "../builtin-proxy.ts";
+import { isBuiltInProxyRunning, readTunnelFailure, startBuiltInProxy } from "../builtin-proxy.ts";
 import {
   endpointUrl,
   findEndpoint,
@@ -72,13 +72,7 @@ export async function runRun(command: RunCommand): Promise<number> {
     });
   }
 
-  const latencyMs = await probeBeforeLaunch(
-    command,
-    preset,
-    endpoint,
-    started,
-    notLiveHint(config.proxy),
-  );
+  const latencyMs = await probeBeforeLaunch(command, preset, endpoint, started, config.proxy);
 
   if (json) {
     reporter.json({ preset: preset.name, endpoint, latencyMs });
@@ -194,7 +188,7 @@ async function probeBeforeLaunch(
   preset: Preset,
   endpoint: Endpoint,
   justStarted: boolean,
-  hint: string,
+  proxy: ProxyConfig,
 ): Promise<number | null> {
   if (!command.check) {
     return null;
@@ -218,15 +212,35 @@ async function probeBeforeLaunch(
     result = await command.reporter.wait(`Probing ${url}`, () => probe(endpoint, options));
   }
   if (!result.live) {
-    throw new PrxError("proxy_not_live", `Endpoint ${url} is not live: ${result.message}.`, hint);
+    throw await notLiveError(
+      command.system,
+      proxy,
+      `Endpoint ${url} is not live: ${result.message}.`,
+    );
   }
   return result.latencyMs;
 }
 
-// A built-in proxy leaves logs worth pointing at; an external one has only its endpoints
-function notLiveHint(proxy: ProxyConfig): string {
-  const where = proxy.source === "built-in" ? " and the log directory" : "";
-  return `Run prx status to see every endpoint${where}.`;
+// A built-in proxy has a tunnel whose log may explain the failure, and status shows the log
+// directory; an external one has only its endpoints
+async function notLiveError(
+  system: SystemAdapter,
+  proxy: ProxyConfig,
+  summary: string,
+): Promise<PrxError> {
+  if (proxy.source !== "built-in") {
+    return new PrxError("proxy_not_live", summary, "Run prx status to see every endpoint.");
+  }
+  const statusHint = "Run prx status to see every endpoint and the log directory.";
+  const failure = await readTunnelFailure(system, proxy);
+  if (failure === undefined) {
+    return new PrxError("proxy_not_live", summary, statusHint);
+  }
+  return new PrxError(
+    "proxy_not_live",
+    `${summary} Tunnel: ${failure.message}`,
+    failure.hint ?? statusHint,
+  );
 }
 
 function notFoundHint(preset: Preset): string {

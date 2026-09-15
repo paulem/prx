@@ -83,7 +83,7 @@ Endpoint http://127.0.0.1:8118 is live (42 ms)
 Endpoint socks5://127.0.0.1:1080 is live (31 ms)
 ```
 
-Exits 0 when both endpoints are live and 1 when they are not in time, with the log directory named; the processes are left running either way, so autossh can keep retrying while you look at the log. An already running proxy is reported as such, still probed, and exits 0, so scripts can call `up` without checking first.
+Exits 0 when both endpoints are live and 1 when they are not in time, with the tunnel failure and the log directory named as `status` does; the processes are left running either way, so autossh can keep retrying while you look at the log. An already running proxy is reported as such, still probed, and exits 0, so scripts can call `up` without checking first.
 
 ### `prx down`
 
@@ -91,22 +91,26 @@ Stops the built-in proxy: sends SIGTERM to autossh and privoxy and removes their
 
 ### `prx status`
 
-Reports on the proxy without launching anything. For a built-in proxy the first line says whether it is running, meaning both processes exist. Then, for either source, one line per endpoint with the probe result and latency. Exits 0 only when every endpoint is live and 1 otherwise, with the reason on each line. A built-in proxy that is running but not live also gets the log directory named, which tells a dead tunnel from a stopped one:
+Reports on the proxy without launching anything. For a built-in proxy the first line says whether it is running, meaning both processes exist. Then, for either source, one line per endpoint with the probe result and latency. Exits 0 only when every endpoint is live and 1 otherwise, with the reason on each line. A built-in proxy that is running but not live also gets the tunnel failure, the last line ssh wrote to the autossh log, and the log directory named, which tells a dead tunnel from a stopped one. A rejected key, a changed host key and an unreachable host each end with a hint naming the next command:
 
 ```
 Built-in proxy is running
-Endpoint http://127.0.0.1:8118 is live (42 ms)
-Endpoint socks5://127.0.0.1:1080 is not live: no response from the proxy before the timeout
+Endpoint http://127.0.0.1:8118 is not live: proxy rejected CONNECT with status 500
+Endpoint socks5://127.0.0.1:1080 is not live: connection refused (ECONNREFUSED)
+Tunnel: me@box.example.com: Permission denied (publickey).
 Logs are in /Users/me/.local/state/prx
+Authorize ~/.ssh/id_ed25519 on box.example.com, or run prx init to pick another key.
 ```
 
-On a terminal the same report is a block: the headline carries a green, yellow or dim symbol for live, running but not live, and not running, then one aligned row per endpoint, then the log directory as a link:
+On a terminal the same report is a block: the headline carries a green, yellow or dim symbol for live, running but not live, and not running, then one aligned row per endpoint, then the tunnel failure and the log directory as a link, then the hint:
 
 ```
 ▲  Built-in proxy is running
-   http   127.0.0.1:8118  live      42 ms
-   socks  127.0.0.1:1080  not live  no response from the proxy before the timeout
-   logs   ~/.local/state/prx
+   http    127.0.0.1:8118  not live  proxy rejected CONNECT with status 500
+   socks   127.0.0.1:1080  not live  connection refused (ECONNREFUSED)
+   tunnel  me@box.example.com: Permission denied (publickey).
+   logs    ~/.local/state/prx
+   Authorize ~/.ssh/id_ed25519 on box.example.com, or run prx init to pick another key.
 ```
 
 ### `prx list`
@@ -134,6 +138,7 @@ Lists what it will remove, asks for confirmation, and then removes the binary, t
 prx status --json
 # {"source":"external","endpoints":{"http":{"host":"127.0.0.1","port":8118,"live":true,"latencyMs":42},"socks":{"host":"127.0.0.1","port":1080,"live":false,"reason":"refused","message":"connection refused (ECONNREFUSED)"}}}
 # {"source":"built-in","running":true,"endpoints":{...}}
+# {"source":"built-in","running":true,"endpoints":{...},"tunnelFailure":{"message":"me@box.example.com: Permission denied (publickey).","hint":"..."}}
 
 prx up --json
 # {"source":"built-in","running":true,"started":true,"endpoints":{...}}
@@ -200,7 +205,7 @@ With `source: built-in`, prx runs the proxy itself from an ssh destination you g
 
 The tunnel ignores `~/.ssh/config` entirely and runs ssh with `-F /dev/null` and a fixed option set: batch mode, so it never prompts; exit on forward failure; `StrictHostKeyChecking=accept-new`, so a first connection to a new host works in the background and a changed key still fails; and server-alive settings that notice a dropped connection within seconds so autossh can reconnect. A passphrase-protected key must already be in ssh-agent. Jump hosts, `Host` aliases and other ssh config options are not available; `prx init` reads `~/.ssh/config` only to preselect the key it names for the host. See [ADR-0004](docs/adr/0004-tunnel-ignores-ssh-config.md).
 
-The pid files, the generated privoxy config and both log files live in the state directory, `~/.local/state/prx` or `$XDG_STATE_HOME/prx`, never in the config directory, so `prx config` still prints only what you edit by hand. A pid file whose process is gone, after a reboot for instance, counts as not running and is removed. The built-in proxy does not survive a reboot; `prx up` starts it again.
+The pid files, the generated privoxy config and both log files live in the state directory, `~/.local/state/prx` or `$XDG_STATE_HOME/prx`, never in the config directory, so `prx config` still prints only what you edit by hand. Each start replaces the log files, so a log only ever describes the current run. A pid file whose process is gone, after a reboot for instance, counts as not running and is removed. The built-in proxy does not survive a reboot; `prx up` starts it again.
 
 ## How it works
 

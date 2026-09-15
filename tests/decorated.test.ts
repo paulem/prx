@@ -84,6 +84,30 @@ describe("decorated status", () => {
     expect(fake.stdout()).toContain("]8;;file:///home/test/.local/state/prx\\");
   });
 
+  test("a dead tunnel gets a tunnel row and its hint under the table", async () => {
+    const http = await pool.open("live");
+    const socks = await pool.closed();
+    const fake = decoratedFake();
+    writeFakeConfig(fake, builtInProxy({ httpPort: http.port, socksPort: socks.port }));
+    fake.alivePids.add(1);
+    fake.alivePids.add(2);
+    fake.files.set("/home/test/.local/state/prx/autossh.pid", "1\n");
+    fake.files.set("/home/test/.local/state/prx/privoxy.pid", "2\n");
+    fake.files.set(
+      "/home/test/.local/state/prx/autossh.log",
+      "me@box.example: Permission denied (publickey).\n",
+    );
+
+    await runCli(["status"], fake.system, { probeTimeoutMs: 1000 });
+
+    const lines = visible(fake.stdout()).split("\n");
+    expect(lines[3]).toBe("   tunnel  me@box.example: Permission denied (publickey).");
+    expect(lines[4]).toBe("   logs    ~/.local/state/prx");
+    expect(lines[5]).toBe(
+      "   Run prx init to pick a key file, or add one to ssh-agent with: ssh-add <path>",
+    );
+  });
+
   test("a stopped built-in proxy is muted and says how to start it", async () => {
     const http = await pool.closed();
     const socks = await pool.closed();

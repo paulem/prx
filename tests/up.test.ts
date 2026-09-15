@@ -175,6 +175,59 @@ describe("prx up", () => {
     );
   });
 
+  test("names the tunnel error after the wait and how to fix a rejected key file", async () => {
+    const fake = await withDependencies(false);
+    const { socksPort, httpPort } = ports(fake);
+    writeFakeConfig(
+      fake,
+      builtInProxy({
+        socksPort,
+        httpPort,
+        tunnel: { user: "me", host: "box.example", port: 22, identityFile: "/home/test/.ssh/id" },
+      }),
+    );
+    fake.files.set(
+      `${FAKE_STATE_DIR}/autossh.log`,
+      "me@box.example: Permission denied (publickey).\n",
+    );
+
+    const exitCode = await runCli(["up"], fake.system, {
+      probeTimeoutMs: 300,
+      startTimeoutMs: 300,
+    });
+
+    expect(exitCode).toBe(1);
+    expect(fake.stdout()).toBe(
+      "Built-in proxy started\n" +
+        `Endpoint http://127.0.0.1:${httpPort} is not live: connection refused (ECONNREFUSED)\n` +
+        `Endpoint socks5://127.0.0.1:${socksPort} is not live: connection refused (ECONNREFUSED)\n` +
+        "Tunnel: me@box.example: Permission denied (publickey).\n" +
+        `Logs are in ${FAKE_STATE_DIR}\n` +
+        "Authorize ~/.ssh/id on box.example, or run prx init to pick another key.\n",
+    );
+  });
+
+  test("a stale host key and an unreachable host each get their own hint", async () => {
+    const cases = [
+      [
+        "Host key verification failed.",
+        "Remove the stale host key with: ssh-keygen -R box.example",
+      ],
+      [
+        "ssh: connect to host box.example port 22: Connection refused",
+        "Check the host and port with prx config, or run prx init to change them.",
+      ],
+    ];
+    for (const [line, hint] of cases) {
+      const fake = await withDependencies(false);
+      fake.files.set(`${FAKE_STATE_DIR}/autossh.log`, `${line}\n`);
+
+      await runCli(["up", "--json"], fake.system, { probeTimeoutMs: 300, startTimeoutMs: 300 });
+
+      expect(JSON.parse(fake.stdout()).tunnelFailure).toEqual({ message: line, hint });
+    }
+  });
+
   test("keeps probing until an endpoint comes up within the timeout", async () => {
     const fake = await withDependencies(true);
     const { socksPort } = ports(fake);
