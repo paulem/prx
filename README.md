@@ -113,6 +113,13 @@ On a terminal the same report is a block: the headline carries a green, yellow o
    Authorize ~/.ssh/id_ed25519 on box.example.com, or run prx init to pick another key.
 ```
 
+A stopped proxy prints only the headline and how to start it, since its ports refusing connections is nothing to report. An endpoint that answers anyway, live or silent, gets its line, because something prx does not track is listening on that port:
+
+```
+Built-in proxy is not running
+Run prx up to start it.
+```
+
 ### `prx list`
 
 Shows the presets, whether each app is installed, its launch mode, and the endpoint types it can use, most preferred first:

@@ -251,7 +251,7 @@ describe("prx status on a built-in proxy", () => {
     expect(JSON.parse(fake.stdout())).not.toHaveProperty("tunnelFailure");
   });
 
-  test("a stopped proxy is reported as not running without a log hint", async () => {
+  test("a stopped proxy whose ports refuse connections says only how to start it", async () => {
     const http = await pool.closed();
     const socks = await pool.closed();
     const fake = createFakeSystem();
@@ -260,11 +260,42 @@ describe("prx status on a built-in proxy", () => {
     const exitCode = await statusOf(fake);
 
     expect(exitCode).toBe(1);
-    expect(fake.stdout()).toBe(
-      "Built-in proxy is not running\n" +
-        `Endpoint http://127.0.0.1:${http.port} is not live: connection refused (ECONNREFUSED)\n` +
-        `Endpoint socks5://127.0.0.1:${socks.port} is not live: connection refused (ECONNREFUSED)\n`,
+    expect(fake.stdout()).toBe("Built-in proxy is not running\nRun prx up to start it.\n");
+  });
+
+  test("a stopped proxy still names an endpoint that something else answers on", async () => {
+    const http = await pool.open("live");
+    const socks = await pool.closed();
+    const fake = createFakeSystem();
+    writeFakeConfig(fake, builtInProxy({ socksPort: socks.port, httpPort: http.port }));
+
+    const exitCode = await statusOf(fake);
+
+    expect(exitCode).toBe(1);
+    expect(fake.stdout()).toMatch(
+      new RegExp(
+        "^Built-in proxy is not running\n" +
+          `Endpoint http://127\\.0\\.0\\.1:${http.port} is live \\(\\d+ ms\\)\n` +
+          "Run prx up to start it.\n$",
+      ),
     );
+  });
+
+  test("--json on a stopped proxy keeps every endpoint", async () => {
+    const http = await pool.closed();
+    const socks = await pool.closed();
+    const fake = createFakeSystem();
+    writeFakeConfig(fake, builtInProxy({ socksPort: socks.port, httpPort: http.port }));
+
+    await statusOf(fake, ["--json"]);
+
+    expect(JSON.parse(fake.stdout())).toMatchObject({
+      running: false,
+      endpoints: {
+        http: { live: false, reason: "refused" },
+        socks: { live: false, reason: "refused" },
+      },
+    });
   });
 
   test("--json gains running", async () => {

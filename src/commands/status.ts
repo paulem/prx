@@ -36,6 +36,15 @@ export interface EndpointReport {
 }
 
 const PROBING_MESSAGE = "Probing endpoints";
+const START_HINT = "Run prx up to start it.";
+
+/**
+ * A stopped proxy's ports refuse connections, which is nothing to report; any other answer
+ * means something prx does not track is listening there
+ */
+function unexpectedWhenStopped(reports: EndpointReport[]): EndpointReport[] {
+  return reports.filter(({ result }) => result.live || result.reason !== "refused");
+}
 
 export async function runStatus({
   system,
@@ -122,8 +131,12 @@ export function builtInView(system: SystemAdapter, report: BuiltInReport): View 
  */
 export function formatBuiltInReport(system: SystemAdapter, report: BuiltInReport): string {
   const { headline, running, reports, tunnelFailure } = report;
+  if (!running) {
+    const unexpected = unexpectedWhenStopped(reports).map(formatEndpointReport);
+    return `${[headline, ...unexpected, START_HINT].join("\n")}\n`;
+  }
   const lines = [headline, ...reports.map(formatEndpointReport)];
-  if (running && !allLive(reports)) {
+  if (!allLive(reports)) {
     if (tunnelFailure !== undefined) {
       lines.push(`Tunnel: ${tunnelFailure.message}`);
     }
@@ -142,13 +155,13 @@ export function formatBuiltInReport(system: SystemAdapter, report: BuiltInReport
  */
 export function builtInBlock(system: SystemAdapter, report: BuiltInReport): Block {
   const { headline, running, reports, tunnelFailure } = report;
-  const rows = endpointRows(reports);
   if (!running) {
     return {
       mark: symbol("muted"),
-      lines: [headline, ...table(rows), dim("Run prx up to start it.")],
+      lines: [headline, ...table(endpointRows(unexpectedWhenStopped(reports))), dim(START_HINT)],
     };
   }
+  const rows = endpointRows(reports);
   if (allLive(reports)) {
     return { mark: symbol("success"), lines: [headline, ...table(rows)] };
   }

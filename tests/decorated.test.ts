@@ -116,9 +116,24 @@ describe("decorated status", () => {
 
     await runCli(["status"], fake.system, { probeTimeoutMs: 1000 });
 
-    const lines = visible(fake.stdout()).split("\n");
-    expect(lines[0]).toBe("●  Built-in proxy is not running");
-    expect(lines[3]).toBe("   Run prx up to start it.");
+    expect(visible(fake.stdout())).toBe(
+      "●  Built-in proxy is not running\n   Run prx up to start it.\n",
+    );
+  });
+
+  test("a stopped built-in proxy shows the one endpoint something else answers on", async () => {
+    const http = await pool.open("silent");
+    const socks = await pool.closed();
+    const fake = decoratedFake();
+    writeFakeConfig(fake, builtInProxy({ httpPort: http.port, socksPort: socks.port }));
+
+    await runCli(["status"], fake.system, { probeTimeoutMs: 300 });
+
+    expect(visible(fake.stdout())).toBe(
+      "●  Built-in proxy is not running\n" +
+        `   http  127.0.0.1:${http.port}  not live  no response from the proxy before the timeout\n` +
+        "   Run prx up to start it.\n",
+    );
   });
 
   test("an external proxy gets its own headline", async () => {
