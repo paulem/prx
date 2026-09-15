@@ -11,7 +11,7 @@ export const INSTALL_HINT = "brew install autossh privoxy";
 
 /**
  * How long a freshly started proxy gets to become live. A tunnel that stalls once needs the
- * ServerAlive window (10 s) for ssh to give up, then a ConnectTimeout (10 s) at worst for
+ * ServerAlive window (6 to 9 s) for ssh to give up, then a ConnectTimeout (10 s) at worst for
  * autossh to reconnect, so the wait covers both with room for the handshake
  */
 export const DEFAULT_START_TIMEOUT_MS = 30_000;
@@ -187,7 +187,8 @@ function privoxyConfig(stateDir: string, proxy: BuiltInProxyConfig): string {
 }
 
 // The option set from ADR-0004: nothing from ~/.ssh/config, never a prompt, and a tunnel that
-// notices a dead connection within seconds so autossh can reconnect
+// notices a dead connection within seconds so autossh can reconnect. Toggling a VPN kills the
+// connection without closing it, so ssh gives up after two missed keepalives, 3 s apart
 function autosshRequest(
   command: string,
   proxy: BuiltInProxyConfig,
@@ -220,7 +221,7 @@ function autosshRequest(
       "-o",
       "StrictHostKeyChecking=accept-new",
       "-o",
-      "ServerAliveInterval=5",
+      "ServerAliveInterval=3",
       "-o",
       "ServerAliveCountMax=2",
       "-o",

@@ -164,7 +164,7 @@ describe("the built-in proxy lifecycle through the built bundle", () => {
         "-o",
         "StrictHostKeyChecking=accept-new",
         "-o",
-        "ServerAliveInterval=5",
+        "ServerAliveInterval=3",
         "-o",
         "ServerAliveCountMax=2",
         "-o",
