@@ -172,7 +172,7 @@ describe("prx status on a built-in proxy", () => {
     );
   });
 
-  test("names the log directory when running but not live", async () => {
+  test("a stalled proxy names the log directory and says how to restart it", async () => {
     const http = await pool.closed();
     const socks = await pool.closed();
     const fake = createFakeSystem();
@@ -186,7 +186,8 @@ describe("prx status on a built-in proxy", () => {
       "Built-in proxy is running\n" +
         `Endpoint http://127.0.0.1:${http.port} is not live: connection refused (ECONNREFUSED)\n` +
         `Endpoint socks5://127.0.0.1:${socks.port} is not live: connection refused (ECONNREFUSED)\n` +
-        `Logs are in ${FAKE_STATE_DIR}\n`,
+        `Logs are in ${FAKE_STATE_DIR}\n` +
+        "Run prx up to restart it.\n",
     );
   });
 
@@ -233,6 +234,43 @@ describe("prx status on a built-in proxy", () => {
       tunnelFailure: { message: "kex_exchange_identification: read: Connection reset" },
     });
     expect(JSON.parse(fake.stdout()).tunnelFailure).not.toHaveProperty("hint");
+  });
+
+  test("a tunnel that timed out is explained as reconnecting", async () => {
+    const http = await pool.closed();
+    const socks = await pool.closed();
+    const fake = createFakeSystem();
+    writeFakeConfig(fake, builtInProxy({ socksPort: socks.port, httpPort: http.port }));
+    markRunning(fake);
+    fake.files.set(
+      `${FAKE_STATE_DIR}/autossh.log`,
+      "Timeout, server box.example not responding.\n",
+    );
+
+    await statusOf(fake, ["--json"]);
+
+    expect(JSON.parse(fake.stdout()).tunnelFailure).toEqual({
+      message: "Timeout, server box.example not responding.",
+      hint: "The tunnel is reconnecting. Run prx status again in a few seconds, or prx up to restart it.",
+    });
+  });
+
+  test("an unrecognised tunnel error still gets the restart hint in text mode", async () => {
+    const http = await pool.closed();
+    const socks = await pool.closed();
+    const fake = createFakeSystem();
+    writeFakeConfig(fake, builtInProxy({ socksPort: socks.port, httpPort: http.port }));
+    markRunning(fake);
+    fake.files.set(
+      `${FAKE_STATE_DIR}/autossh.log`,
+      "kex_exchange_identification: read: Connection reset\n",
+    );
+
+    await statusOf(fake);
+
+    expect(fake.stdout()).toMatch(
+      /\nTunnel: kex_exchange_identification: read: Connection reset\nLogs are in .*\nRun prx up to restart it\.\n$/,
+    );
   });
 
   test("a live proxy never reads the tunnel log", async () => {

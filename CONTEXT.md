@@ -32,6 +32,10 @@ _Avoid_: ssh session, dynamic forward, socks server
 The state of a built-in proxy whose processes exist. Running says nothing about whether an endpoint is live.
 _Avoid_: started, up, active, alive
 
+**Stalled**:
+The state of a built-in proxy that is running while an endpoint is not live. prx cannot tell whether the tunnel is reconnecting or stuck; a stalled proxy is repaired by restarting it.
+_Avoid_: broken, dead, hung, reconnecting, half-up
+
 **App**:
 A program that prx launches on the user's behalf, such as Claude Code or Chrome. "Child process" is used only for the literal OS process of an attached launch.
 _Avoid_: child, target, program, tool

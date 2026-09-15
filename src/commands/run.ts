@@ -1,4 +1,9 @@
-import { isBuiltInProxyRunning, readTunnelFailure, startBuiltInProxy } from "../builtin-proxy.ts";
+import {
+  isBuiltInProxyRunning,
+  readTunnelFailure,
+  restartBuiltInProxy,
+  startBuiltInProxy,
+} from "../builtin-proxy.ts";
 import {
   endpointUrl,
   findEndpoint,
@@ -16,7 +21,7 @@ import { DEFAULT_PROBE_URL, probe, probeUntilLive, type ProbeResult } from "../p
 import { bold, dim, renderBlock, symbol } from "../style.ts";
 import type { SystemAdapter } from "../system.ts";
 import { initWizard } from "./init.ts";
-import { narrateWait, STARTING_MESSAGE } from "./up.ts";
+import { narrateWait, RESTARTING_MESSAGE, STARTING_MESSAGE } from "./up.ts";
 
 export interface RunCommand {
   system: SystemAdapter;
@@ -64,15 +69,7 @@ export async function runRun(command: RunCommand): Promise<number> {
     }
   }
 
-  const started = await startIfStopped(command, config.proxy);
-  if (started) {
-    reporter.notice({
-      plain: "prx: started the built-in proxy\n",
-      decorated: renderBlock({ mark: symbol("step"), lines: ["Built-in proxy started"] }),
-    });
-  }
-
-  const latencyMs = await probeBeforeLaunch(command, preset, endpoint, started, config.proxy);
+  const latencyMs = await makeLive(command, preset, endpoint, config.proxy);
 
   if (json) {
     reporter.json({ preset: preset.name, endpoint, latencyMs });
@@ -168,57 +165,68 @@ async function readConfigOrInit(command: RunCommand): Promise<Config> {
   }
 }
 
-// A launch after a reboot is never a dead end: a built-in proxy that is not running is started
-// exactly as up starts it, with the same checks and errors
-async function startIfStopped(
-  { system, reporter }: RunCommand,
-  proxy: ProxyConfig,
-): Promise<boolean> {
-  if (proxy.source !== "built-in" || (await isBuiltInProxyRunning(system))) {
-    return false;
-  }
-  await reporter.wait(STARTING_MESSAGE, () => startBuiltInProxy(system, proxy));
-  return true;
-}
-
-// A proxy that was just started gets the whole start timeout to come up; one that was already
-// there is probed once
-async function probeBeforeLaunch(
+/**
+ * A launch is never a dead end: a stopped built-in proxy is started and a stalled one is
+ * restarted, exactly as up does it, and either gets the whole start timeout to come up. A
+ * proxy nobody touched is probed once. Resolves to the latency, or null without a probe
+ */
+async function makeLive(
   command: RunCommand,
   preset: Preset,
   endpoint: Endpoint,
-  justStarted: boolean,
   proxy: ProxyConfig,
 ): Promise<number | null> {
+  const { system, reporter } = command;
+  const url = endpointUrl(endpoint);
+  const options = { url: preset.probeUrl ?? DEFAULT_PROBE_URL, timeoutMs: command.probeTimeoutMs };
+  const stopped = proxy.source === "built-in" && !(await isBuiltInProxyRunning(system));
+  if (stopped) {
+    await reporter.wait(STARTING_MESSAGE, () => startBuiltInProxy(system, proxy));
+    announce(reporter, "started");
+  }
   if (!command.check) {
     return null;
   }
-  const url = endpointUrl(endpoint);
-  const options = { url: preset.probeUrl ?? DEFAULT_PROBE_URL, timeoutMs: command.probeTimeoutMs };
   let result: ProbeResult;
-  if (justStarted) {
-    const narration = narrateWait(command.startTimeoutMs, () => url, [endpoint]);
-    result = await command.reporter.wait(narration.current(), (progress) =>
-      probeUntilLive(endpoint, {
-        ...options,
-        waitMs: command.startTimeoutMs,
-        onAttempt(attempt) {
-          narration.record(endpoint, attempt);
-          progress(narration.current());
-        },
-      }),
-    );
+  if (stopped) {
+    result = await waitUntilLive(command, endpoint, options);
   } else {
-    result = await command.reporter.wait(`Probing ${url}`, () => probe(endpoint, options));
+    result = await reporter.wait(`Probing ${url}`, () => probe(endpoint, options));
+    if (!result.live && proxy.source === "built-in") {
+      await reporter.wait(RESTARTING_MESSAGE, () => restartBuiltInProxy(system, proxy));
+      announce(reporter, "restarted");
+      result = await waitUntilLive(command, endpoint, options);
+    }
   }
   if (!result.live) {
-    throw await notLiveError(
-      command.system,
-      proxy,
-      `Endpoint ${url} is not live: ${result.message}.`,
-    );
+    throw await notLiveError(system, proxy, `Endpoint ${url} is not live: ${result.message}.`);
   }
   return result.latencyMs;
+}
+
+function announce(reporter: Reporter, outcome: "started" | "restarted"): void {
+  reporter.notice({
+    plain: `prx: ${outcome} the built-in proxy\n`,
+    decorated: renderBlock({ mark: symbol("step"), lines: [`Built-in proxy ${outcome}`] }),
+  });
+}
+
+function waitUntilLive(
+  command: RunCommand,
+  endpoint: Endpoint,
+  options: { url: string; timeoutMs: number },
+): Promise<ProbeResult> {
+  const narration = narrateWait(command.startTimeoutMs, () => endpointUrl(endpoint), [endpoint]);
+  return command.reporter.wait(narration.current(), (progress) =>
+    probeUntilLive(endpoint, {
+      ...options,
+      waitMs: command.startTimeoutMs,
+      onAttempt(attempt) {
+        narration.record(endpoint, attempt);
+        progress(narration.current());
+      },
+    }),
+  );
 }
 
 // A built-in proxy has a tunnel whose log may explain the failure, and status shows the log

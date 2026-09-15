@@ -46,7 +46,7 @@ prx: http endpoint http://127.0.0.1:8118 is live (42 ms), launching claude
 prx: socks endpoint socks5://127.0.0.1:1080 is live (31 ms), launching chrome
 ```
 
-A built-in proxy that is not running, after a reboot for instance, is started first, exactly as `prx up` starts it and with the same `dependency_missing` and `port_in_use` refusals. `run` then waits up to the start timeout for the chosen endpoint alone to come live and says so on stderr before the launch line:
+A built-in proxy that is not running, after a reboot for instance, is started first, exactly as `prx up` starts it and with the same `dependency_missing` and `port_in_use` refusals. A built-in proxy that is running but stalled, one whose endpoint fails the probe, is restarted the same way; that is what happens after a VPN is switched on or off under a live tunnel. Either way `run` then waits up to the start timeout for the chosen endpoint alone to come live and says so on stderr before the launch line:
 
 ```
 prx: started the built-in proxy
@@ -59,7 +59,7 @@ Everything after the preset name is passed to the app verbatim as passthrough ar
 prx run --no-check claude --resume
 ```
 
-`--no-check` skips the probe and launches anyway; it still starts a stopped built-in proxy, without waiting for it. When no config exists yet, `run` starts the init wizard first, so a first run is never a dead end. In `--json` mode the wizard is skipped and a missing config is an error, since a wrapper cannot answer prompts.
+`--no-check` skips the probe and launches anyway; it still starts a stopped built-in proxy, without waiting for it, but never restarts a running one, since without a probe it cannot tell a stalled proxy from a live one. When no config exists yet, `run` starts the init wizard first, so a first run is never a dead end. In `--json` mode the wizard is skipped and a missing config is an error, since a wrapper cannot answer prompts.
 
 An attached launch, such as `claude`, shares your terminal and exits with the app's exit code. A detached launch, such as `chrome`, returns as soon as the app has been handed off.
 
@@ -83,15 +83,15 @@ Endpoint http://127.0.0.1:8118 is live (42 ms)
 Endpoint socks5://127.0.0.1:1080 is live (31 ms)
 ```
 
-Exits 0 when both endpoints are live and 1 when they are not in time, with the tunnel failure and the log directory named as `status` does; the processes are left running either way, so autossh can keep retrying while you look at the log. An already running proxy is reported as such, still probed, and exits 0, so scripts can call `up` without checking first.
+Exits 0 when both endpoints are live and 1 when they are not in time, with the tunnel failure and the log directory named as `status` does; the processes are left running either way, so autossh can keep retrying while you look at the log. A running proxy is probed once: when both endpoints are live it is reported as already running and `up` exits 0, so scripts can call `up` without checking first. When an endpoint is not live the proxy is stalled, and `up` stops both processes, starts them again, and waits as after a first start, reporting `Built-in proxy restarted`. Switching a VPN on or off under a live tunnel is the usual cause: ssh notices the dead connection within seconds and autossh reconnects on its own, but `up` gets there faster than waiting. In `--json` mode the report carries `started` and `restarted`.
 
 ### `prx down`
 
-Stops the built-in proxy: sends SIGTERM to autossh and privoxy and removes their pid files. A proxy that is not running is reported with exit 0. Refuses with `not_builtin` on an external proxy.
+Stops the built-in proxy: sends SIGTERM to autossh and privoxy, waits for them to exit so the ports are free again, and removes their pid files. A proxy that is not running is reported with exit 0. Refuses with `not_builtin` on an external proxy.
 
 ### `prx status`
 
-Reports on the proxy without launching anything. For a built-in proxy the first line says whether it is running, meaning both processes exist. Then, for either source, one line per endpoint with the probe result and latency. Exits 0 only when every endpoint is live and 1 otherwise, with the reason on each line. A built-in proxy that is running but not live also gets the tunnel failure, the last line ssh wrote to the autossh log, and the log directory named, which tells a dead tunnel from a stopped one. A rejected key, a changed host key and an unreachable host each end with a hint naming the next command:
+Reports on the proxy without launching anything. For a built-in proxy the first line says whether it is running, meaning both processes exist. Then, for either source, one line per endpoint with the probe result and latency. Exits 0 only when every endpoint is live and 1 otherwise, with the reason on each line. A built-in proxy that is running but not live, a stalled one, also gets the tunnel failure, the last line ssh wrote to the autossh log, and the log directory named, which tells a dead tunnel from a stopped one. A rejected key, a changed host key and an unreachable host each end with a hint naming the next command; a keepalive timeout, which is what a VPN toggle leaves behind, says the tunnel is reconnecting; anything else ends with `Run prx up to restart it.`:
 
 ```
 Built-in proxy is running

@@ -81,6 +81,7 @@ describe("decorated status", () => {
       `   socks  127.0.0.1:${socks.port}  not live  connection refused (ECONNREFUSED)`,
     );
     expect(lines[3]).toBe("   logs   ~/.local/state/prx");
+    expect(lines[4]).toBe("   Run prx up to restart it.");
     expect(fake.stdout()).toContain("]8;;file:///home/test/.local/state/prx\\");
   });
 

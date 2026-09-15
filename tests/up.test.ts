@@ -54,6 +54,14 @@ function ports(fake: FakeSystem): { socksPort: number; httpPort: number } {
   return JSON.parse(text).proxy;
 }
 
+/** Makes the fake's built-in proxy running: both pid files exist and both pids are alive */
+function markRunning(fake: FakeSystem): void {
+  fake.files.set(`${FAKE_STATE_DIR}/autossh.pid`, "1001\n");
+  fake.files.set(`${FAKE_STATE_DIR}/privoxy.pid`, "1002\n");
+  fake.alivePids.add(1001);
+  fake.alivePids.add(1002);
+}
+
 function upWith(fake: FakeSystem, args: string[] = []): Promise<number> {
   return runCli(["up", ...args], fake.system, { probeTimeoutMs: 1000 });
 }
@@ -136,7 +144,7 @@ describe("prx up", () => {
     ]);
   });
 
-  test("--json prints the status report with started", async () => {
+  test("--json prints the status report with started and restarted", async () => {
     const fake = await withDependencies(true);
     const { socksPort, httpPort } = ports(fake);
 
@@ -147,6 +155,7 @@ describe("prx up", () => {
       source: "built-in",
       running: true,
       started: true,
+      restarted: false,
       endpoints: {
         http: { host: "127.0.0.1", port: httpPort, live: true, latencyMs: expect.any(Number) },
         socks: { host: "127.0.0.1", port: socksPort, live: true, latencyMs: expect.any(Number) },
@@ -272,7 +281,55 @@ describe("prx up", () => {
     expect(exitCode).toBe(0);
     expect(fake.backgroundStarts).toHaveLength(startsAfterFirst);
     const lastLine = fake.stdout().trimEnd().split("\n").at(-1) ?? "";
-    expect(JSON.parse(lastLine)).toMatchObject({ running: true, started: false });
+    expect(JSON.parse(lastLine)).toMatchObject({ running: true, started: false, restarted: false });
+  });
+
+  test("a stalled proxy is stopped, started again and reported as restarted", async () => {
+    const fake = await withDependencies(false);
+    const { socksPort, httpPort } = ports(fake);
+    markRunning(fake);
+    setTimeout(async () => {
+      await pool.open("live", httpPort);
+      await pool.open("socks", socksPort);
+    }, 500);
+
+    const exitCode = await runCli(["up"], fake.system, {
+      probeTimeoutMs: 300,
+      startTimeoutMs: 3000,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(fake.signals).toEqual([
+      { pid: 1001, signal: "SIGTERM" },
+      { pid: 1002, signal: "SIGTERM" },
+    ]);
+    expect(fake.backgroundStarts.map((start) => start.command)).toEqual([AUTOSSH, PRIVOXY]);
+    expect(fake.stdout()).toMatch(
+      new RegExp(
+        "^Built-in proxy restarted\n" +
+          `Endpoint http://127\\.0\\.0\\.1:${httpPort} is live \\(\\d+ ms\\)\n` +
+          `Endpoint socks5://127\\.0\\.0\\.1:${socksPort} is live \\(\\d+ ms\\)\n$`,
+      ),
+    );
+  });
+
+  test("a restart that stays stalled exits 1 and says so in JSON", async () => {
+    const fake = await withDependencies(false);
+    markRunning(fake);
+
+    const exitCode = await runCli(["up", "--json"], fake.system, {
+      probeTimeoutMs: 300,
+      startTimeoutMs: 300,
+    });
+
+    expect(exitCode).toBe(1);
+    expect(fake.backgroundStarts).toHaveLength(2);
+    expect(JSON.parse(fake.stdout())).toMatchObject({
+      running: true,
+      started: false,
+      restarted: true,
+      endpoints: { http: { live: false }, socks: { live: false } },
+    });
   });
 
   test("already running is reported in text mode", async () => {

@@ -35,8 +35,9 @@ export interface EndpointReport {
   result: ProbeResult;
 }
 
-const PROBING_MESSAGE = "Probing endpoints";
+export const PROBING_MESSAGE = "Probing endpoints";
 const START_HINT = "Run prx up to start it.";
+const RESTART_HINT = "Run prx up to restart it.";
 
 /**
  * A stopped proxy's ports refuse connections, which is nothing to report; any other answer
@@ -68,11 +69,14 @@ export async function runStatus({
     Promise.all([isBuiltInProxyRunning(system), probeEndpoints(proxy, probeTimeoutMs)]),
   );
   const headline = running ? "Built-in proxy is running" : "Built-in proxy is not running";
+  const tunnelFailure = await explainNotLive(system, proxy, running, reports);
+  const stalled = running && !allLive(reports);
   const report: BuiltInReport = {
     headline,
     running,
     reports,
-    tunnelFailure: await explainNotLive(system, proxy, running, reports),
+    tunnelFailure,
+    hint: stalled ? (tunnelFailure?.hint ?? RESTART_HINT) : undefined,
   };
   reporter.result(builtInView(system, report), {
     source: "built-in",
@@ -89,6 +93,8 @@ export interface BuiltInReport {
   reports: EndpointReport[];
   /** Why the tunnel is failing, when the proxy runs but an endpoint is not live */
   tunnelFailure: TunnelFailure | undefined;
+  /** What to do about a stalled proxy, shown apart under the report */
+  hint: string | undefined;
 }
 
 /** The autossh log only explains a proxy that runs while an endpoint is not live */
@@ -130,7 +136,7 @@ export function builtInView(system: SystemAdapter, report: BuiltInReport): View 
  * to do when running but not live
  */
 export function formatBuiltInReport(system: SystemAdapter, report: BuiltInReport): string {
-  const { headline, running, reports, tunnelFailure } = report;
+  const { headline, running, reports, tunnelFailure, hint } = report;
   if (!running) {
     const unexpected = unexpectedWhenStopped(reports).map(formatEndpointReport);
     return `${[headline, ...unexpected, START_HINT].join("\n")}\n`;
@@ -141,8 +147,8 @@ export function formatBuiltInReport(system: SystemAdapter, report: BuiltInReport
       lines.push(`Tunnel: ${tunnelFailure.message}`);
     }
     lines.push(`Logs are in ${system.stateDir()}`);
-    if (tunnelFailure?.hint !== undefined) {
-      lines.push(tunnelFailure.hint);
+    if (hint !== undefined) {
+      lines.push(hint);
     }
   }
   return `${lines.join("\n")}\n`;
@@ -154,7 +160,7 @@ export function formatBuiltInReport(system: SystemAdapter, report: BuiltInReport
  * the way to start it; a hint, when there is one, stands apart under the table
  */
 export function builtInBlock(system: SystemAdapter, report: BuiltInReport): Block {
-  const { headline, running, reports, tunnelFailure } = report;
+  const { headline, running, reports, tunnelFailure, hint } = report;
   if (!running) {
     return {
       mark: symbol("muted"),
@@ -175,8 +181,8 @@ export function builtInBlock(system: SystemAdapter, report: BuiltInReport): Bloc
     { text: "logs", style: dim },
     { text: pathLink(system.homeDir(), system.stateDir()), style: dim, span: true },
   ]);
-  const hint = tunnelFailure?.hint === undefined ? [] : [dim(tunnelFailure.hint)];
-  return { mark: symbol("warn"), lines: [headline, ...table(rows), ...hint] };
+  const advice = hint === undefined ? [] : [dim(hint)];
+  return { mark: symbol("warn"), lines: [headline, ...table(rows), ...advice] };
 }
 
 function externalBlock(reports: EndpointReport[]): Block {

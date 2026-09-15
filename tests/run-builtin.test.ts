@@ -210,6 +210,69 @@ describe("prx run with a stopped built-in proxy", () => {
   });
 });
 
+describe("prx run with a stalled built-in proxy", () => {
+  test("restarts it as up does, waits for the endpoint, says so, and launches", async () => {
+    const { fake, endpoints } = await withStoppedProxy();
+    markRunning(fake);
+    await endpoints.http.close();
+    setTimeout(async () => {
+      await pool.open("live", endpoints.http.port);
+    }, 500);
+
+    const exitCode = await runCli(["run", "claude"], fake.system, {
+      probeTimeoutMs: 300,
+      startTimeoutMs: 3000,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(fake.signals).toEqual([
+      { pid: 1001, signal: "SIGTERM" },
+      { pid: 1002, signal: "SIGTERM" },
+    ]);
+    expect(fake.backgroundStarts).toHaveLength(2);
+    expect(fake.spawns).toHaveLength(1);
+    expect(fake.stderr()).toMatch(
+      new RegExp(
+        "^prx: restarted the built-in proxy\n" +
+          `prx: http endpoint http://127\\.0\\.0\\.1:${endpoints.http.port} is live \\(\\d+ ms\\), launching claude\n$`,
+      ),
+    );
+  });
+
+  test("a restart that stays stalled stops the launch with exit 1", async () => {
+    const { fake, endpoints } = await withStoppedProxy();
+    markRunning(fake);
+    await endpoints.http.close();
+
+    const exitCode = await runCli(["run", "claude"], fake.system, {
+      probeTimeoutMs: 300,
+      startTimeoutMs: 300,
+    });
+
+    expect(exitCode).toBe(1);
+    expect(fake.backgroundStarts).toHaveLength(2);
+    expect(fake.spawns).toEqual([]);
+    expect(fake.stderr()).toBe(
+      "prx: restarted the built-in proxy\n" +
+        `Endpoint http://127.0.0.1:${endpoints.http.port} is not live: connection refused (ECONNREFUSED). ` +
+        "Run prx status to see every endpoint and the log directory.\n",
+    );
+  });
+
+  test("--no-check launches through a stalled proxy without touching it", async () => {
+    const { fake, endpoints } = await withStoppedProxy();
+    markRunning(fake);
+    await endpoints.http.close();
+
+    const exitCode = await runWith(fake, ["--no-check", "claude"]);
+
+    expect(exitCode).toBe(0);
+    expect(fake.signals).toEqual([]);
+    expect(fake.backgroundStarts).toEqual([]);
+    expect(fake.spawns).toHaveLength(1);
+  });
+});
+
 describe("prx run with a running built-in proxy", () => {
   test("starts nothing extra and launches with no extra stderr line", async () => {
     const { fake, endpoints } = await withStoppedProxy();

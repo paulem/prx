@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { BUILT_IN_HOST, type BuiltInProxyConfig } from "./config.ts";
 import { PrxError } from "./errors.ts";
 import { tildePath } from "./style.ts";
@@ -112,6 +113,9 @@ function tunnelHint(
     const key = tildePath(system.homeDir(), tunnel.identityFile);
     return `Authorize ${key} on ${tunnel.host}, or run prx init to pick another key.`;
   }
+  if (message.startsWith("Timeout, server")) {
+    return "The tunnel is reconnecting. Run prx status again in a few seconds, or prx up to restart it.";
+  }
   if (message.includes("Host key verification failed")) {
     return `Remove the stale host key with: ssh-keygen -R ${tunnel.host}`;
   }
@@ -121,7 +125,19 @@ function tunnelHint(
   return undefined;
 }
 
-/** Signals whatever is still running and removes the pid files; resolves to whether anything was running */
+/** Stops a stalled proxy and starts it afresh, with the same checks and errors as a first start */
+export async function restartBuiltInProxy(
+  system: SystemAdapter,
+  proxy: BuiltInProxyConfig,
+): Promise<void> {
+  await stopBuiltInProxy(system);
+  await startBuiltInProxy(system, proxy);
+}
+
+/**
+ * Signals whatever is still running, waits for it to exit so the ports are free again, and
+ * removes the pid files; resolves to whether anything was running
+ */
 export async function stopBuiltInProxy(system: SystemAdapter): Promise<boolean> {
   const paths = builtInProxyPaths(system);
   const stopped = await Promise.all([
@@ -231,8 +247,20 @@ async function stopProcess(system: SystemAdapter, pidPath: string): Promise<bool
     return false;
   }
   await system.signalProcess(pid, "SIGTERM");
+  await waitForExit(system, pid);
   await system.remove(pidPath);
   return true;
+}
+
+const EXIT_POLL_MS = 50;
+const EXIT_WAIT_MS = 5000;
+
+// A process that ignores SIGTERM this long is left to the port check to complain about
+async function waitForExit(system: SystemAdapter, pid: number): Promise<void> {
+  const deadline = performance.now() + EXIT_WAIT_MS;
+  while ((await system.isProcessAlive(pid)) && performance.now() < deadline) {
+    await sleep(EXIT_POLL_MS);
+  }
 }
 
 /** The pid in the file when that process is alive; a stale or unreadable pid file is removed */
