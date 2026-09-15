@@ -1,6 +1,16 @@
 import * as clack from "@clack/prompts";
 import { execFile, spawn } from "node:child_process";
-import { access, constants, mkdir, open, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  access,
+  constants,
+  mkdir,
+  open,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import net from "node:net";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
@@ -10,11 +20,15 @@ export type PromptAnswer<T> = { kind: "answered"; value: T } | { kind: "cancelle
 export interface SelectOption<T extends string> {
   value: T;
   label: string;
+  /** Shown dimmed next to the label while the option is highlighted */
+  hint?: string | undefined;
 }
 
 export interface SelectQuestion<T extends string> {
   message: string;
   options: SelectOption<T>[];
+  /** The option highlighted at first; the first option when omitted */
+  initialValue?: T | undefined;
 }
 
 export interface TextQuestion {
@@ -91,6 +105,8 @@ export interface SystemAdapter {
   remove: (path: string) => Promise<void>;
   /** Resolves to undefined when the file does not exist */
   readTextFile: (path: string) => Promise<string | undefined>;
+  /** The entry names in a directory, sorted; empty when the directory does not exist */
+  listDirectory: (path: string) => Promise<string[]>;
   /** Creates missing parent directories */
   writeTextFile: (path: string, text: string) => Promise<void>;
   /** Resolves to the executable's path when the command is on PATH */
@@ -152,6 +168,16 @@ export function createNodeSystemAdapter(env: NodeJS.ProcessEnv = process.env): S
       } catch (error) {
         if (isMissingFile(error)) {
           return undefined;
+        }
+        throw error;
+      }
+    },
+    async listDirectory(path) {
+      try {
+        return (await readdir(path)).toSorted();
+      } catch (error) {
+        if (isMissingFile(error)) {
+          return [];
         }
         throw error;
       }
@@ -262,7 +288,11 @@ export function createNodeSystemAdapter(env: NodeJS.ProcessEnv = process.env): S
       async select<T extends string>(question: SelectQuestion<T>) {
         // clack types options through a conditional on the value type, which a generic cannot satisfy
         const options = question.options as Parameters<typeof clack.select<T>>[0]["options"];
-        return answerFrom(await clack.select<T>({ message: question.message, options }));
+        const initial =
+          question.initialValue === undefined ? {} : { initialValue: question.initialValue };
+        return answerFrom(
+          await clack.select<T>({ message: question.message, options, ...initial }),
+        );
       },
       async text(question) {
         return answerFrom(

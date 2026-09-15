@@ -335,7 +335,15 @@ describe("prx init with a built-in proxy", () => {
       { kind: "text", message: "ssh user", initialValue: "" },
       { kind: "text", message: "ssh host", initialValue: "" },
       { kind: "text", message: "ssh port", initialValue: "22" },
-      { kind: "text", message: "Identity file, empty to use ssh-agent", initialValue: "" },
+      {
+        kind: "select",
+        message: "ssh key",
+        options: [
+          { value: "ssh-agent", label: "Keys in ssh-agent" },
+          { value: "another-file", label: "Another file" },
+        ],
+        initialValue: "ssh-agent",
+      },
       { kind: "text", message: "SOCKS port", initialValue: "1080" },
       { kind: "text", message: "HTTP port", initialValue: "8118" },
       { kind: "confirm", message: "Start the built-in proxy now?", initialValue: true },
@@ -356,14 +364,147 @@ describe("prx init with a built-in proxy", () => {
     );
   });
 
-  test("saves an identity file and a custom ssh port, expanding a leading tilde", async () => {
+  test("lists the keys in ~/.ssh with their comments, the first one preselected", async () => {
     const fake = withDependencies();
+    fake.files.set("/home/test/.ssh/config", "Host box\n");
+    fake.files.set("/home/test/.ssh/known_hosts", "");
+    fake.files.set("/home/test/.ssh/id_ed25519_do", "private");
+    fake.files.set("/home/test/.ssh/id_ed25519_do.pub", "ssh-ed25519 AAAA me@laptop\n");
+    fake.files.set("/home/test/.ssh/id_rsa", "private");
+    fake.files.set("/home/test/.ssh/id_rsa.pub", "ssh-rsa AAAA\n");
+    fake.files.set("/home/test/.ssh/orphan.pub", "ssh-rsa AAAA\n");
+    fake.answers.push(
+      "built-in",
+      "me",
+      "box.example",
+      USE_DEFAULT,
+      "/home/test/.ssh/id_rsa",
+      USE_DEFAULT,
+      USE_DEFAULT,
+      false,
+    );
+
+    await runCli(["init"], fake.system);
+
+    expect(fake.questions[4]).toEqual({
+      kind: "select",
+      message: "ssh key",
+      options: [
+        { value: "/home/test/.ssh/id_ed25519_do", label: "id_ed25519_do", hint: "me@laptop" },
+        { value: "/home/test/.ssh/id_rsa", label: "id_rsa", hint: undefined },
+        { value: "ssh-agent", label: "Keys in ssh-agent" },
+        { value: "another-file", label: "Another file" },
+      ],
+      initialValue: "/home/test/.ssh/id_ed25519_do",
+    });
+    expect(savedConfig(fake)).toMatchObject({
+      proxy: { tunnel: { identityFile: "/home/test/.ssh/id_rsa" } },
+    });
+  });
+
+  test("preselects the key that ~/.ssh/config names for the host", async () => {
+    const fake = withDependencies();
+    fake.files.set(
+      "/home/test/.ssh/config",
+      "Host github.com\n  IdentityFile ~/.ssh/id_github\n\nHost box.*\n  IdentityFile ~/.ssh/id_box\n",
+    );
+    fake.files.set("/home/test/.ssh/id_box", "private");
+    fake.files.set("/home/test/.ssh/id_box.pub", "ssh-ed25519 AAAA me@laptop\n");
+    fake.files.set("/home/test/.ssh/id_github", "private");
+    fake.files.set("/home/test/.ssh/id_github.pub", "ssh-ed25519 AAAA\n");
+    fake.answers.push(
+      "built-in",
+      "me",
+      "box.example",
+      USE_DEFAULT,
+      USE_DEFAULT,
+      USE_DEFAULT,
+      USE_DEFAULT,
+      false,
+    );
+
+    await runCli(["init"], fake.system);
+
+    expect(fake.questions[4]).toMatchObject({
+      options: [
+        {
+          value: "/home/test/.ssh/id_box",
+          label: "id_box",
+          hint: "me@laptop, named in ~/.ssh/config",
+        },
+        { value: "/home/test/.ssh/id_github", label: "id_github", hint: undefined },
+        { value: "ssh-agent" },
+        { value: "another-file" },
+      ],
+      initialValue: "/home/test/.ssh/id_box",
+    });
+    expect(savedConfig(fake)).toMatchObject({
+      proxy: { tunnel: { identityFile: "/home/test/.ssh/id_box" } },
+    });
+  });
+
+  test("a configured key without a public half is listed first when the file exists", async () => {
+    const fake = withDependencies();
+    fake.files.set("/home/test/.ssh/config", "Host box.example\n  IdentityFile ~/keys/box\n");
+    fake.files.set("/home/test/keys/box", "private");
+    fake.files.set("/home/test/.ssh/id_rsa", "private");
+    fake.files.set("/home/test/.ssh/id_rsa.pub", "ssh-rsa AAAA\n");
+    fake.answers.push(
+      "built-in",
+      "me",
+      "box.example",
+      USE_DEFAULT,
+      USE_DEFAULT,
+      USE_DEFAULT,
+      USE_DEFAULT,
+      false,
+    );
+
+    await runCli(["init"], fake.system);
+
+    expect(fake.questions[4]).toMatchObject({
+      options: [
+        { value: "/home/test/keys/box", label: "~/keys/box", hint: "named in ~/.ssh/config" },
+        { value: "/home/test/.ssh/id_rsa", label: "id_rsa" },
+        { value: "ssh-agent" },
+        { value: "another-file" },
+      ],
+      initialValue: "/home/test/keys/box",
+    });
+  });
+
+  test("a configured key that does not exist is ignored", async () => {
+    const fake = withDependencies();
+    fake.files.set("/home/test/.ssh/config", "Host *\n  IdentityFile ~/keys/gone\n");
+    fake.answers.push(
+      "built-in",
+      "me",
+      "box.example",
+      USE_DEFAULT,
+      USE_DEFAULT,
+      USE_DEFAULT,
+      USE_DEFAULT,
+      false,
+    );
+
+    await runCli(["init"], fake.system);
+
+    expect(fake.questions[4]).toMatchObject({ initialValue: "ssh-agent" });
+    expect(savedConfig(fake)).toMatchObject({
+      proxy: { tunnel: { user: "me", host: "box.example", port: 22 } },
+    });
+  });
+
+  test("saves another identity file and a custom ssh port, expanding a leading tilde", async () => {
+    const fake = withDependencies();
+    fake.files.set("/home/test/keys/box", "private");
     fake.answers.push(
       "built-in",
       "me",
       "box.example",
       "2222",
-      "~/.ssh/id_ed25519",
+      "another-file",
+      "~/keys/box",
       "1081",
       "8119",
       false,
@@ -379,11 +520,39 @@ describe("prx init with a built-in proxy", () => {
           user: "me",
           host: "box.example",
           port: 2222,
-          identityFile: "/home/test/.ssh/id_ed25519",
+          identityFile: "/home/test/keys/box",
         },
         socksPort: 1081,
         httpPort: 8119,
       },
+    });
+  });
+
+  test("a missing identity file is reported and asked again", async () => {
+    const fake = withDependencies();
+    fake.files.set("/home/test/keys/box", "private");
+    fake.answers.push(
+      "built-in",
+      "me",
+      "box.example",
+      USE_DEFAULT,
+      "another-file",
+      "~/keys/nope",
+      "  ",
+      "~/keys/box",
+      USE_DEFAULT,
+      USE_DEFAULT,
+      false,
+    );
+
+    const exitCode = await runCli(["init"], fake.system);
+
+    expect(exitCode).toBe(0);
+    expect(questionMessages(fake).filter((message) => message === "Identity file")).toHaveLength(2);
+    expect(fake.rejectedInputs).toEqual([{ input: "  ", message: "Enter a value" }]);
+    expect(fake.stdout()).toMatch(/^No file at \/home\/test\/keys\/nope\n/);
+    expect(savedConfig(fake)).toMatchObject({
+      proxy: { tunnel: { identityFile: "/home/test/keys/box" } },
     });
   });
 

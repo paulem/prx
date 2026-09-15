@@ -11,13 +11,18 @@ import type {
 
 /** Scripted answer that cancels the prompt, as Ctrl-C would */
 export const CANCEL = Symbol("cancel");
-/** Scripted answer that accepts a text prompt's initial value, as a bare Enter would */
+/** Scripted answer that accepts a prompt's initial value, as a bare Enter would */
 export const USE_DEFAULT = Symbol("use default");
 
 export type ScriptedAnswer = string | boolean | typeof CANCEL | typeof USE_DEFAULT;
 
 export type AskedQuestion =
-  | { kind: "select"; message: string; options: { value: string; label: string }[] }
+  | {
+      kind: "select";
+      message: string;
+      options: { value: string; label: string; hint?: string | undefined }[];
+      initialValue?: string | undefined;
+    }
   | { kind: "text"; message: string; initialValue: string }
   | { kind: "confirm"; message: string; initialValue: boolean };
 
@@ -147,6 +152,15 @@ export function createFakeSystem(): FakeSystem {
         }
       },
       readTextFile: async (path) => files.get(path),
+      listDirectory: async (path) => {
+        const names = new Set<string>();
+        for (const file of files.keys()) {
+          if (file.startsWith(`${path}/`)) {
+            names.add(file.slice(path.length + 1).split("/")[0] as string);
+          }
+        }
+        return [...names].toSorted();
+      },
       writeTextFile: async (path, text) => {
         files.set(path, text);
       },
@@ -174,12 +188,19 @@ export function createFakeSystem(): FakeSystem {
       isPortFree: async (port) => !busyPorts.has(port),
       prompt: {
         async select(question) {
-          questions.push({ kind: "select", message: question.message, options: question.options });
+          questions.push({
+            kind: "select",
+            message: question.message,
+            options: question.options,
+            initialValue: question.initialValue,
+          });
           const answer = nextAnswer();
           if (answer === CANCEL) {
             return { kind: "cancelled" };
           }
-          const option = question.options.find((candidate) => candidate.value === answer);
+          const chosen =
+            answer === USE_DEFAULT ? (question.initialValue ?? question.options[0]?.value) : answer;
+          const option = question.options.find((candidate) => candidate.value === chosen);
           if (option === undefined) {
             throw new Error(`scripted answer ${String(answer)} is not one of the select options`);
           }

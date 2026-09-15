@@ -1,5 +1,6 @@
 import * as clack from "@clack/prompts";
 import { join } from "node:path";
+import { parse as parseSshConfig } from "ssh-config";
 import { findDependencies } from "../builtin-proxy.ts";
 import {
   addressFormatHint,
@@ -43,6 +44,12 @@ const DEFAULT_ADDRESSES: Record<EndpointType, string> = {
 // An HTTP endpoint is what most setups have; a SOCKS endpoint is offered but not assumed
 const RECORD_BY_DEFAULT: Record<EndpointType, boolean> = { http: true, socks: false };
 const DEFAULT_SSH_PORT = "22";
+const SSH_DIR = ".ssh";
+const SSH_CONFIG = "config";
+const PUBLIC_KEY_SUFFIX = ".pub";
+const SSH_CONFIG_HINT = "named in ~/.ssh/config";
+const USE_AGENT = "ssh-agent";
+const ANOTHER_FILE = "another-file";
 const DEFAULT_SOCKS_PORT = "1080";
 const DEFAULT_HTTP_PORT = "8118";
 
@@ -124,12 +131,11 @@ function summaryRows(
     [summaryLabel("Source"), { text: "built-in" }],
     [summaryLabel("Tunnel"), { text: `${tunnel.user}@${tunnel.host}:${tunnel.port}` }],
   ];
-  if (tunnel.identityFile !== undefined) {
-    rows.push([
-      summaryLabel("Identity"),
-      { text: tildePath(system.homeDir(), tunnel.identityFile) },
-    ]);
-  }
+  const identity =
+    tunnel.identityFile === undefined
+      ? "keys in ssh-agent"
+      : tildePath(system.homeDir(), tunnel.identityFile);
+  rows.push([summaryLabel("Identity"), { text: identity }]);
   rows.push(
     [summaryLabel("SOCKS"), { text: `127.0.0.1:${proxy.socksPort}` }],
     [summaryLabel("HTTP"), { text: `127.0.0.1:${proxy.httpPort}` }],
@@ -149,7 +155,7 @@ function nextStep(listing: PresetListing[]): string {
 // The dependency check comes first so a missing binary is reported before any typing
 async function askBuiltInProxy(command: InitCommand): Promise<BuiltInProxyConfig> {
   await findDependencies(command.system);
-  const tunnel = await askTunnel(command.system);
+  const tunnel = await askTunnel(command);
   const socksPort = await askFreePort(command, "SOCKS port", DEFAULT_SOCKS_PORT, () => undefined);
   const httpPort = await askFreePort(command, "HTTP port", DEFAULT_HTTP_PORT, (port) =>
     port === socksPort ? "Must differ from the SOCKS port" : undefined,
@@ -157,17 +163,127 @@ async function askBuiltInProxy(command: InitCommand): Promise<BuiltInProxyConfig
   return { source: "built-in", tunnel, socksPort, httpPort };
 }
 
-async function askTunnel(system: SystemAdapter): Promise<TunnelConfig> {
+async function askTunnel(command: InitCommand): Promise<TunnelConfig> {
+  const { system } = command;
   const user = await askText(system, "ssh user", "", requireNonBlank);
   const host = await askText(system, "ssh host", "", requireHost);
   const port = Number(await askText(system, "ssh port", DEFAULT_SSH_PORT, requirePort));
-  const identityFile = (
-    await askText(system, "Identity file, empty to use ssh-agent", "", () => undefined)
-  ).trim();
-  if (identityFile === "") {
+  const identityFile = await askIdentity(command, host);
+  if (identityFile === undefined) {
     return { user, host, port };
   }
-  return { user, host, port, identityFile: expandHome(system, identityFile) };
+  return { user, host, port, identityFile };
+}
+
+interface SshKey {
+  path: string;
+  name: string;
+  hint: string | undefined;
+}
+
+/**
+ * Offers the keys found in ~/.ssh first, since a key file keeps working after a reboot while
+ * ssh-agent forgets its identities; a key outside ~/.ssh is typed in as a path. The key that
+ * ~/.ssh/config names for the host is preselected, since ssh would have used it interactively
+ */
+async function askIdentity(command: InitCommand, host: string): Promise<string | undefined> {
+  const { system } = command;
+  const keys = await listSshKeys(system, host);
+  const choice = answerOrCancel(
+    await system.prompt.select<string>({
+      message: "ssh key",
+      options: [
+        ...keys.map((key) => ({ value: key.path, label: key.name, hint: key.hint })),
+        { value: USE_AGENT, label: "Keys in ssh-agent" },
+        { value: ANOTHER_FILE, label: "Another file" },
+      ],
+      initialValue:
+        keys.find((key) => key.hint?.includes(SSH_CONFIG_HINT))?.path ?? keys[0]?.path ?? USE_AGENT,
+    }),
+  );
+  if (choice === USE_AGENT) {
+    return undefined;
+  }
+  if (choice === ANOTHER_FILE) {
+    return askIdentityPath(command);
+  }
+  return choice;
+}
+
+// Whether the file exists needs the OS, which a validator cannot reach, so a missing file is
+// reported after the answer and the question is asked again
+async function askIdentityPath(command: InitCommand): Promise<string> {
+  const { system } = command;
+  for (;;) {
+    const input = await askText(system, "Identity file", "", requireNonBlank);
+    const path = expandHome(system, input.trim());
+    if (await system.pathExists(path)) {
+      return path;
+    }
+    warn(command, `No file at ${path}`);
+  }
+}
+
+// A private key is recognised by its public half next to it, the way ssh-keygen writes them;
+// the public key's comment tells keys with generic names apart. A key that ~/.ssh/config names
+// for the host but that has no public half is listed too, ahead of the rest
+async function listSshKeys(system: SystemAdapter, host: string): Promise<SshKey[]> {
+  const dir = join(system.homeDir(), SSH_DIR);
+  const [names, configured] = await Promise.all([
+    system.listDirectory(dir),
+    configuredIdentityFile(system, host),
+  ]);
+  const keys = await Promise.all(
+    names
+      .filter((name) => name.endsWith(PUBLIC_KEY_SUFFIX))
+      .map((name) => name.slice(0, -PUBLIC_KEY_SUFFIX.length))
+      .filter((name) => names.includes(name))
+      .map(async (name) => {
+        const path = join(dir, name);
+        const comment = publicKeyComment(
+          await system.readTextFile(join(dir, `${name}${PUBLIC_KEY_SUFFIX}`)),
+        );
+        const hints = path === configured ? [comment, SSH_CONFIG_HINT] : [comment];
+        return { path, name, hint: joinHints(hints) };
+      }),
+  );
+  if (configured === undefined || keys.some((key) => key.path === configured)) {
+    return keys;
+  }
+  if (!(await system.pathExists(configured))) {
+    return keys;
+  }
+  const extra: SshKey = {
+    path: configured,
+    name: tildePath(system.homeDir(), configured),
+    hint: SSH_CONFIG_HINT,
+  };
+  return [extra, ...keys];
+}
+
+function joinHints(hints: Array<string | undefined>): string | undefined {
+  const present = hints.filter((hint) => hint !== undefined);
+  return present.length === 0 ? undefined : present.join(", ");
+}
+
+// ssh takes the first IdentityFile that a matching Host or Match block sets; the tunnel itself
+// never reads this file, see ADR-0004, so only the wizard's default comes from it
+async function configuredIdentityFile(
+  system: SystemAdapter,
+  host: string,
+): Promise<string | undefined> {
+  const text = await system.readTextFile(join(system.homeDir(), SSH_DIR, SSH_CONFIG));
+  if (text === undefined) {
+    return undefined;
+  }
+  const { IdentityFile } = parseSshConfig(text).compute(host);
+  const first = Array.isArray(IdentityFile) ? IdentityFile[0] : IdentityFile;
+  return first === undefined ? undefined : expandHome(system, first);
+}
+
+function publicKeyComment(publicKey: string | undefined): string | undefined {
+  const comment = publicKey?.trim().split(/\s+/).slice(2).join(" ");
+  return comment === undefined || comment === "" ? undefined : comment;
 }
 
 // The port check needs the OS, which a validator cannot reach, so a busy port is reported

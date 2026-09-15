@@ -7,3 +7,4 @@ The tunnel runs ssh in the background with no one to answer a prompt, so every o
 - A passphrase-protected key must already be in ssh-agent, since batch mode never prompts.
 - Jump hosts, custom ciphers and other per-host ssh options are not available to the tunnel.
 - A `Host` alias cannot be used as the tunnel host; the real hostname is required.
+- `prx init` reads `~/.ssh/config` only to preselect the key it names for the host; what the tunnel uses is the saved `identityFile`, never the file itself.
