@@ -1,10 +1,12 @@
 import { afterEach, beforeAll, describe, expect, test } from "vitest";
 import { runCli } from "../src/cli.ts";
 import {
+  builtInProxy,
   CANCEL,
   createFakeSystem,
   externalProxy,
   FAKE_CONFIG_PATH,
+  FAKE_STATE_DIR,
   USE_DEFAULT,
   writeFakeConfig,
   type FakeSystem,
@@ -28,6 +30,13 @@ function savedConfig(fake: FakeSystem): unknown {
 
 function questionMessages(fake: FakeSystem): string[] {
   return fake.questions.map((question) => question.message);
+}
+
+function markRunning(fake: FakeSystem): void {
+  fake.files.set(`${FAKE_STATE_DIR}/autossh.pid`, "4242\n");
+  fake.files.set(`${FAKE_STATE_DIR}/privoxy.pid`, "4243\n");
+  fake.alivePids.add(4242);
+  fake.alivePids.add(4243);
 }
 
 describe("prx init with an external proxy", () => {
@@ -644,6 +653,89 @@ describe("prx init with a built-in proxy", () => {
     ]);
     expect(fake.stdout()).toMatch(/^Port 1080 is already in use\nPort 8118 is already in use\n/);
     expect(savedConfig(fake)).toMatchObject({ proxy: { socksPort: 1081, httpPort: 8119 } });
+  });
+
+  test("re-running keeps the ports the running built-in proxy listens on", async () => {
+    const fake = withDependencies();
+    writeFakeConfig(fake, builtInProxy());
+    markRunning(fake);
+    fake.busyPorts.add(1080);
+    fake.busyPorts.add(8118);
+    fake.answers.push(
+      "built-in",
+      "me",
+      "box.example",
+      USE_DEFAULT,
+      USE_DEFAULT,
+      USE_DEFAULT,
+      USE_DEFAULT,
+      ".ru",
+      false,
+    );
+
+    const exitCode = await runCli(["init"], fake.system);
+
+    expect(exitCode).toBe(0);
+    expect(fake.stdout()).not.toContain("is already in use");
+    expect(savedConfig(fake)).toEqual({
+      version: 1,
+      proxy: { ...builtInProxy(), bypass: [".ru"] },
+    });
+    expect(fake.questions.at(-1)?.message).toBe("Start the built-in proxy now?");
+    expect(fake.signals).toEqual([]);
+  });
+
+  test("a busy port is still refused when the pid files are stale", async () => {
+    const fake = withDependencies();
+    writeFakeConfig(fake, builtInProxy());
+    fake.files.set(`${FAKE_STATE_DIR}/autossh.pid`, "4242\n");
+    fake.files.set(`${FAKE_STATE_DIR}/privoxy.pid`, "4243\n");
+    fake.busyPorts.add(1080);
+    fake.answers.push(
+      "built-in",
+      "me",
+      "box.example",
+      USE_DEFAULT,
+      USE_DEFAULT,
+      USE_DEFAULT,
+      "1081",
+      USE_DEFAULT,
+      USE_DEFAULT,
+      false,
+    );
+
+    await runCli(["init"], fake.system);
+
+    expect(fake.stdout()).toMatch(/^Port 1080 is already in use\n/);
+    expect(savedConfig(fake)).toMatchObject({ proxy: { socksPort: 1081, httpPort: 8118 } });
+  });
+
+  test("changing the tunnel of a running proxy offers a restart that applies it", async () => {
+    const http = await pool.open("live");
+    const socks = await pool.open("socks");
+    const fake = withDependencies();
+    writeFakeConfig(fake, builtInProxy({ socksPort: socks.port, httpPort: http.port }));
+    markRunning(fake);
+    fake.answers.push(
+      "built-in",
+      "me",
+      "other.example",
+      USE_DEFAULT,
+      USE_DEFAULT,
+      String(socks.port),
+      String(http.port),
+      USE_DEFAULT,
+      true,
+    );
+
+    const exitCode = await runCli(["init"], fake.system);
+
+    expect(exitCode).toBe(0);
+    expect(fake.questions.at(-1)?.message).toBe("Restart the built-in proxy to apply the changes?");
+    expect(fake.signals.map((sent) => sent.pid)).toEqual([4242, 4243]);
+    expect(fake.backgroundStarts.map((start) => start.command)).toEqual([AUTOSSH, PRIVOXY]);
+    expect(fake.backgroundStarts[0]?.args.at(-1)).toBe("other.example");
+    expect(fake.stdout()).toContain("Built-in proxy restarted\n");
   });
 
   test("starting now runs the same flow as up and prints its report", async () => {

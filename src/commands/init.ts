@@ -1,7 +1,8 @@
 import * as clack from "@clack/prompts";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { parse as parseSshConfig } from "ssh-config";
-import { findDependencies } from "../builtin-proxy.ts";
+import { findDependencies, isBuiltInProxyRunning } from "../builtin-proxy.ts";
 import {
   addressFormatHint,
   configPath,
@@ -17,6 +18,7 @@ import {
   type Config,
   type EndpointType,
   type ExternalProxyConfig,
+  type ProxyConfig,
   type TunnelConfig,
 } from "../config.ts";
 import { PrxError } from "../errors.ts";
@@ -25,7 +27,7 @@ import { bold, cyan, dim, pathLink, symbol, table, tildePath, type Cell } from "
 import type { PromptAnswer, SystemAdapter } from "../system.ts";
 import { formatPresetListing, listPresets, presetRows, type PresetListing } from "./list.ts";
 import { allLive, endpointRows, formatEndpointReports, probeEndpoints } from "./status.ts";
-import { bringUp, formatUpReport, upBlock } from "./up.ts";
+import { bringUp, formatUpReport, restartUp, upBlock } from "./up.ts";
 
 export interface InitCommand {
   system: SystemAdapter;
@@ -76,9 +78,13 @@ export async function initWizard(command: InitCommand): Promise<Config> {
     }),
   );
 
+  const existing = await existingProxy(system);
+  const running = await runningBuiltInProxy(system, existing);
   const proxy =
-    source === "external" ? await askExternalProxy(command) : await askBuiltInProxy(command);
-  const bypass = await askBypass(command, await existingBypass(system));
+    source === "external"
+      ? await askExternalProxy(command)
+      : await askBuiltInProxy(command, running);
+  const bypass = await askBypass(command, existing?.bypass ?? []);
   const config: Config = { version: 1, proxy: bypass.length > 0 ? { ...proxy, bypass } : proxy };
   await writeConfig(system, config);
   const path = configPath(system);
@@ -89,12 +95,16 @@ export async function initWizard(command: InitCommand): Promise<Config> {
 
   // The config is already saved at this point, so backing out here only declines the start
   if (proxy.source === "built-in") {
+    // Running processes keep the tunnel and ports they were started with
+    const outdated = running !== undefined && !sameProcesses(running, proxy);
     const startNow = await system.prompt.confirm({
-      message: "Start the built-in proxy now?",
+      message: outdated
+        ? "Restart the built-in proxy to apply the changes?"
+        : "Start the built-in proxy now?",
       initialValue: true,
     });
     if (startNow.kind === "answered" && startNow.value) {
-      const report = await bringUp(command, proxy);
+      const report = outdated ? await restartUp(command, proxy) : await bringUp(command, proxy);
       reporter.step(formatUpReport(system, report), (output) => {
         const block = upBlock(system, report);
         clack.log.message(block.lines, { symbol: block.mark, output });
@@ -181,24 +191,55 @@ async function askBypass(command: InitCommand, initial: string[]): Promise<strin
 }
 
 // The wizard rewrites the whole config, so a re-run offers back what the current one bypasses
-// rather than dropping it; a config too broken to read simply has nothing to offer
-async function existingBypass(system: SystemAdapter): Promise<string[]> {
+// rather than dropping it, and knows which ports the running proxy holds; a config too broken
+// to read simply has nothing to offer
+async function existingProxy(system: SystemAdapter): Promise<ProxyConfig | undefined> {
   try {
-    return (await readConfig(system)).proxy.bypass ?? [];
+    return (await readConfig(system)).proxy;
   } catch (error) {
     if (error instanceof PrxError) {
-      return [];
+      return undefined;
     }
     throw error;
   }
 }
 
+// The settings the running processes were started with, when there are any
+async function runningBuiltInProxy(
+  system: SystemAdapter,
+  existing: ProxyConfig | undefined,
+): Promise<BuiltInProxyConfig | undefined> {
+  if (existing?.source !== "built-in" || !(await isBuiltInProxyRunning(system))) {
+    return undefined;
+  }
+  return existing;
+}
+
+// The bypass list is injected at launch, so it is the one setting a running proxy never holds
+function sameProcesses(running: BuiltInProxyConfig, proxy: BuiltInProxyConfig): boolean {
+  return (
+    isDeepStrictEqual(running.tunnel, proxy.tunnel) &&
+    running.socksPort === proxy.socksPort &&
+    running.httpPort === proxy.httpPort
+  );
+}
+
 // The dependency check comes first so a missing binary is reported before any typing
-async function askBuiltInProxy(command: InitCommand): Promise<BuiltInProxyConfig> {
+async function askBuiltInProxy(
+  command: InitCommand,
+  running: BuiltInProxyConfig | undefined,
+): Promise<BuiltInProxyConfig> {
   await findDependencies(command.system);
   const tunnel = await askTunnel(command);
-  const socksPort = await askFreePort(command, "SOCKS port", DEFAULT_SOCKS_PORT, () => undefined);
-  const httpPort = await askFreePort(command, "HTTP port", DEFAULT_HTTP_PORT, (port) =>
+  const ownPorts = running === undefined ? [] : [running.socksPort, running.httpPort];
+  const socksPort = await askFreePort(
+    command,
+    "SOCKS port",
+    DEFAULT_SOCKS_PORT,
+    ownPorts,
+    () => undefined,
+  );
+  const httpPort = await askFreePort(command, "HTTP port", DEFAULT_HTTP_PORT, ownPorts, (port) =>
     port === socksPort ? "Must differ from the SOCKS port" : undefined,
   );
   return { source: "built-in", tunnel, socksPort, httpPort };
@@ -328,11 +369,13 @@ function publicKeyComment(publicKey: string | undefined): string | undefined {
 }
 
 // The port check needs the OS, which a validator cannot reach, so a busy port is reported
-// after the answer and the question is asked again
+// after the answer and the question is asked again. A port the running built-in proxy listens
+// on is prx's own to keep, and is free again by the time a restart needs it
 async function askFreePort(
   command: InitCommand,
   message: string,
   initialValue: string,
+  ownPorts: number[],
   validate: (port: number) => string | undefined,
 ): Promise<number> {
   const { system } = command;
@@ -342,7 +385,7 @@ async function askFreePort(
       return problem ?? validate(Number(candidate.trim()));
     });
     const port = Number(input.trim());
-    if (await system.isPortFree(port)) {
+    if (ownPorts.includes(port) || (await system.isPortFree(port))) {
       return port;
     }
     warn(command, `Port ${port} is already in use`);

@@ -79,6 +79,12 @@ export async function bringUp(command: UpCommand, proxy: BuiltInProxyConfig): Pr
   if (allLive(reports)) {
     return { outcome: "already-running", reports, tunnelFailure: undefined };
   }
+  return restartUp(command, proxy);
+}
+
+/** Restarts a running proxy, stalled or started from an older config, and waits like bringUp */
+export async function restartUp(command: UpCommand, proxy: BuiltInProxyConfig): Promise<UpReport> {
+  const { system, reporter } = command;
   await reporter.wait(RESTARTING_MESSAGE, () => restartBuiltInProxy(system, proxy));
   return waitForEndpoints(command, proxy, "restarted");
 }
