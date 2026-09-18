@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import {
   isBuiltInProxyRunning,
   readTunnelFailure,
@@ -29,6 +30,8 @@ export interface RunCommand {
   reporter: Reporter;
   probeTimeoutMs: number;
   startTimeoutMs: number;
+  /** How long a quit gets before the app counts as refusing to go */
+  quitWaitMs: number;
   presetName: string;
   passthrough: string[];
   check: boolean;
@@ -60,15 +63,7 @@ export async function runRun(command: RunCommand): Promise<number> {
     );
   }
 
-  if (preset.refuseWhenRunning !== undefined && preset.app.kind === "application") {
-    if (await system.isApplicationRunning(preset.app.name)) {
-      throw new PrxError(
-        "app_already_running",
-        `${preset.app.name} is already running.`,
-        preset.refuseWhenRunning,
-      );
-    }
-  }
+  await clearRunningInstance(command, preset);
 
   const latencyMs = await makeLive(command, preset, endpoint, config.proxy);
   const bypass = bypassEntries(config.proxy);
@@ -109,6 +104,65 @@ export async function runRun(command: RunCommand): Promise<number> {
 
   const outcome = await system.spawnAttached({ command: appPath, args, env: injected.env });
   return exitCodeFromOutcome(outcome);
+}
+
+const QUIT_POLL_MS = 100;
+/** Long enough for a browser with many tabs to close them all and go */
+export const DEFAULT_QUIT_WAIT_MS = 10_000;
+
+/**
+ * An app that ignores injection while an instance exists has to be quit first, so the launch
+ * offers to do it rather than leaving the person to quit and type the command again. A wrapper
+ * reading JSON cannot answer, and declining keeps the old refusal
+ */
+async function clearRunningInstance(command: RunCommand, preset: Preset): Promise<void> {
+  const { system, reporter, json } = command;
+  const reason = preset.quitWhenRunning;
+  if (reason === undefined || preset.app.kind !== "application") {
+    return;
+  }
+  const { name } = preset.app;
+  if (!(await system.isApplicationRunning(name))) {
+    return;
+  }
+  const refusal = new PrxError(
+    "app_already_running",
+    `${name} is already running.`,
+    `${reason}, so quit it and run again.`,
+  );
+  if (json) {
+    throw refusal;
+  }
+  const answer = await system.prompt.confirm({
+    message: `${reason}. Quit ${name} and launch it through the proxy?`,
+    initialValue: true,
+  });
+  if (answer.kind === "cancelled" || !answer.value) {
+    throw refusal;
+  }
+  await reporter.wait(`Quitting ${name}`, async () => {
+    await system.quitApplication(name);
+    await waitUntilQuit(system, name, command.quitWaitMs);
+  });
+  if (await system.isApplicationRunning(name)) {
+    throw new PrxError(
+      "app_already_running",
+      `${name} is still running after being asked to quit.`,
+      "Quit it yourself and run again.",
+    );
+  }
+  reporter.notice({
+    plain: `prx: quit ${name}\n`,
+    decorated: renderBlock({ mark: symbol("step"), lines: [`${name} quit`] }),
+  });
+}
+
+// open would hand the arguments to the surviving instance, so the launch waits for it to go
+async function waitUntilQuit(system: SystemAdapter, name: string, waitMs: number): Promise<void> {
+  const deadline = performance.now() + waitMs;
+  while ((await system.isApplicationRunning(name)) && performance.now() < deadline) {
+    await sleep(QUIT_POLL_MS);
+  }
 }
 
 // The option wins outright; otherwise the first type the preset prefers that the proxy has

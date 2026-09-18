@@ -210,7 +210,7 @@ An attached launch of Claude Code with `HTTP_PROXY`, `HTTPS_PROXY`, and their lo
 
 Launches a new Chrome instance through the macOS `open` command with `--proxy-server=<endpoint URL>` and `--proxy-bypass-list=<bypass>` as arguments, followed by any passthrough arguments and then `https://api.ipify.org` as a landing page. The bypass list is the same one Claude Code gets, spelled the way Chrome reads it; Chrome bypasses loopback on its own, so the local entries in it change nothing. The URL is `socks5://host:port` for a SOCKS endpoint, which Chrome prefers when the proxy has one, and `http://host:port` otherwise; with `socks5://` Chrome resolves DNS on the proxy side. The landing page opens as a tab showing the address the proxy exits from, so a glance tells this window apart from an unproxied Chrome; Chrome itself gives no visible sign that a proxy flag is in effect. Chrome keeps your normal profile. The launch is detached, so prx returns immediately and does not capture Chrome's output.
 
-**Chrome must not already be running.** Chrome ignores proxy flags when an instance already exists: the flag would be silently dropped and you would get an unproxied window that looks proxied. prx checks for a running instance before launching and refuses with exit code 3 and an explanation. Quit Chrome and run again.
+**Chrome must not already be running.** Chrome ignores proxy flags when an instance already exists: the flag would be silently dropped and you would get an unproxied window that looks proxied. prx checks for a running instance before launching and offers to quit it, since a restart is the only way through: answering yes sends Chrome the same quit its own menu does, so it closes its windows and can restore the session, then waits for it to go and launches the proxied instance. Declining, or `--json`, which has nobody to ask, refuses with `app_already_running` and exit code 3. A Chrome that is still there ten seconds after being asked to quit is reported rather than launched around.
 
 ## The built-in proxy
 
@@ -298,7 +298,7 @@ A bypass is the one hole in prx's proxying, so a wrong entry sends traffic you m
 | `0`        | Success                                                                                                                                                                                         |
 | `1`        | An endpoint is not live, from `run`, `up` or `status`, or the init wizard was cancelled                                                                                                         |
 | `2`        | Usage error: unknown command or option, unknown preset, app not installed, missing endpoint, missing dependency, busy port, `up` or `down` on an external proxy, or a missing or invalid config |
-| `3`        | Chrome is already running                                                                                                                                                                       |
+| `3`        | Chrome is already running and was not quit                                                                                                                                                      |
 | app's code | An attached launch exits with the app's own exit code, or 128 plus the signal number when a signal killed the app                                                                               |
 
 Exit codes are identical in `--json` mode.

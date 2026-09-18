@@ -120,6 +120,8 @@ export interface SystemAdapter {
   launchDetached: (request: LaunchRequest) => Promise<void>;
   /** Whether an app from an Applications folder has a running instance */
   isApplicationRunning: (name: string) => Promise<boolean>;
+  /** Asks a running app to quit the way its menu would, so it closes its windows and saves state */
+  quitApplication: (name: string) => Promise<void>;
   /** Starts a process that outlives prx, with its output replacing the log file, and resolves to its pid */
   startBackground: (request: BackgroundRequest) => Promise<number>;
   isProcessAlive: (pid: number) => Promise<boolean>;
@@ -223,6 +225,18 @@ export function createNodeSystemAdapter(env: NodeJS.ProcessEnv = process.env): S
             resolve(true);
           } else if (error.code === 1) {
             resolve(false);
+          } else {
+            reject(error);
+          }
+        });
+      });
+    },
+    quitApplication(name) {
+      // AppleScript's quit is what the app's own Quit menu item sends, unlike a signal
+      return new Promise((resolve, reject) => {
+        execFile("osascript", ["-e", `quit app "${name}"`], (error) => {
+          if (error === null) {
+            resolve();
           } else {
             reject(error);
           }

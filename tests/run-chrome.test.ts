@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, describe, expect, test } from "vitest";
 import { runCli } from "../src/cli.ts";
 import {
+  CANCEL,
   createFakeSystem,
   externalProxy,
   writeFakeConfig,
@@ -158,16 +159,72 @@ describe("prx run chrome", () => {
     ]);
   });
 
-  test("refuses with exit 3 when Chrome is already running", async () => {
+  test("offers to quit a running Chrome, then quits it and launches through the proxy", async () => {
     const fake = await withLiveProxy();
     fake.running.add("Google Chrome");
+    fake.answers.push(true);
+
+    const exitCode = await runCli(["run", "chrome"], fake.system);
+
+    expect(exitCode).toBe(0);
+    expect(fake.questions).toEqual([
+      {
+        kind: "confirm",
+        message:
+          "Chrome ignores proxy flags when an instance exists. Quit Google Chrome and launch it through the proxy?",
+        initialValue: true,
+      },
+    ]);
+    expect(fake.quits).toEqual(["Google Chrome"]);
+    expect(fake.running.has("Google Chrome")).toBe(false);
+    expect(fake.launches[0]?.args.slice(4)).toEqual([
+      `--proxy-server=http://127.0.0.1:${proxy?.port}`,
+      "--proxy-bypass-list=localhost,127.0.0.1,::1",
+      LANDING_URL,
+    ]);
+    expect(fake.stderr()).toContain("prx: quit Google Chrome\n");
+  });
+
+  test("declining the quit refuses with exit 3 and launches nothing", async () => {
+    const fake = await withLiveProxy();
+    fake.running.add("Google Chrome");
+    fake.answers.push(false);
 
     const exitCode = await runCli(["run", "chrome"], fake.system);
 
     expect(exitCode).toBe(3);
+    expect(fake.quits).toEqual([]);
     expect(fake.launches).toEqual([]);
     expect(fake.stderr()).toBe(
       "Google Chrome is already running. Chrome ignores proxy flags when an instance exists, so quit it and run again.\n",
+    );
+  });
+
+  test("cancelling the quit prompt refuses with exit 3", async () => {
+    const fake = await withLiveProxy();
+    fake.running.add("Google Chrome");
+    fake.answers.push(CANCEL);
+
+    const exitCode = await runCli(["run", "chrome"], fake.system);
+
+    expect(exitCode).toBe(3);
+    expect(fake.quits).toEqual([]);
+    expect(fake.launches).toEqual([]);
+  });
+
+  test("a Chrome that will not quit is reported instead of launched", async () => {
+    const fake = await withLiveProxy();
+    fake.running.add("Google Chrome");
+    fake.refuseToQuit.add("Google Chrome");
+    fake.answers.push(true);
+
+    const exitCode = await runCli(["run", "chrome"], fake.system, { quitWaitMs: 20 });
+
+    expect(exitCode).toBe(3);
+    expect(fake.quits).toEqual(["Google Chrome"]);
+    expect(fake.launches).toEqual([]);
+    expect(fake.stderr()).toBe(
+      "Google Chrome is still running after being asked to quit. Quit it yourself and run again.\n",
     );
   });
 

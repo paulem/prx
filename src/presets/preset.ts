@@ -16,8 +16,8 @@ export interface Preset {
   launch: LaunchMode;
   /** Overrides the default probe URL so the probe exercises the host the app needs */
   probeUrl?: string;
-  /** Why a launch must be refused while the app is already running, for apps that ignore injection then */
-  refuseWhenRunning?: string;
+  /** Why a running instance must be quit before launching, for an app that ignores injection while one exists */
+  quitWhenRunning?: string;
   /** A page the app opens at launch as visible proof that it goes through the proxy */
   landingUrl?: string;
 }

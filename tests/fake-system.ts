@@ -63,8 +63,12 @@ export interface FakeSystem {
   spawnOutcome: SpawnOutcome;
   /** Every detached launch the CLI asked for, in order */
   launches: LaunchRequest[];
-  /** Apps the fake reports as having a running instance */
+  /** Apps the fake reports as having a running instance; quitting one removes it */
   running: Set<string>;
+  /** Apps the CLI asked to quit, in order */
+  quits: string[];
+  /** Apps that stay running however often they are asked to quit */
+  refuseToQuit: Set<string>;
   /** Public key lines the fake reports as loaded in ssh-agent */
   agentKeys: string[];
   /** Every background process the CLI started, in order; each gets the next pid from 1001 */
@@ -102,6 +106,8 @@ export function createFakeSystem(): FakeSystem {
   const spawns: SpawnRequest[] = [];
   const launches: LaunchRequest[] = [];
   const running = new Set<string>();
+  const quits: string[] = [];
+  const refuseToQuit = new Set<string>();
   const agentKeys: string[] = [];
   const backgroundStarts: BackgroundRequest[] = [];
   const alivePids = new Set<number>();
@@ -177,6 +183,12 @@ export function createFakeSystem(): FakeSystem {
         launches.push(request);
       },
       isApplicationRunning: async (name) => running.has(name),
+      quitApplication: async (name) => {
+        quits.push(name);
+        if (!refuseToQuit.has(name)) {
+          running.delete(name);
+        }
+      },
       startBackground: async (request) => {
         backgroundStarts.push(request);
         const pid = FIRST_PID + backgroundStarts.length - 1;
@@ -255,6 +267,8 @@ export function createFakeSystem(): FakeSystem {
     spawnOutcome: { exitCode: 0, signal: null },
     launches,
     running,
+    quits,
+    refuseToQuit,
     agentKeys,
     backgroundStarts,
     alivePids,

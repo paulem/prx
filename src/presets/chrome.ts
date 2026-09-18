@@ -6,7 +6,6 @@ export const chrome: Preset = {
   injection: "args",
   endpoints: ["socks", "http"],
   launch: "detached",
-  refuseWhenRunning:
-    "Chrome ignores proxy flags when an instance exists, so quit it and run again.",
+  quitWhenRunning: "Chrome ignores proxy flags when an instance exists",
   landingUrl: "https://api.ipify.org",
 };

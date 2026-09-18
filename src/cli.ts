@@ -5,7 +5,7 @@ import { runConfig } from "./commands/config.ts";
 import { runDown } from "./commands/down.ts";
 import { runInit } from "./commands/init.ts";
 import { runList } from "./commands/list.ts";
-import { runRun } from "./commands/run.ts";
+import { DEFAULT_QUIT_WAIT_MS, runRun } from "./commands/run.ts";
 import { runStatus } from "./commands/status.ts";
 import { runUp } from "./commands/up.ts";
 import { runUninstall } from "./commands/uninstall.ts";
@@ -21,6 +21,7 @@ const USAGE_ERROR_EXIT_CODE = 2;
 export interface CliOptions {
   probeTimeoutMs?: number;
   startTimeoutMs?: number;
+  quitWaitMs?: number;
 }
 
 interface JsonOption {
@@ -43,6 +44,7 @@ export async function runCli(
 ): Promise<number> {
   const probeTimeoutMs = options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
   const startTimeoutMs = options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS;
+  const quitWaitMs = options.quitWaitMs ?? DEFAULT_QUIT_WAIT_MS;
   let exitCode = 0;
 
   // Commands report their own failures; commander only sees usage errors
@@ -105,6 +107,7 @@ export async function runCli(
           reporter,
           probeTimeoutMs,
           startTimeoutMs,
+          quitWaitMs,
           presetName,
           passthrough,
           check: commandOptions.check,
