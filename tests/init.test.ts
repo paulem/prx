@@ -256,6 +256,116 @@ describe("prx init with an external proxy", () => {
   });
 });
 
+describe("prx init re-run over an existing config", () => {
+  test("offers an external proxy's source, endpoints and addresses back", async () => {
+    const socks = await pool.open("socks");
+    const fake = createFakeSystem();
+    writeFakeConfig(fake, externalProxy({ socks }));
+    fake.answers.push(USE_DEFAULT, false, true, USE_DEFAULT, USE_DEFAULT);
+
+    await runCli(["init"], fake.system);
+
+    expect(fake.questions.slice(0, 4)).toMatchObject([
+      { message: "Proxy source", initialValue: "external" },
+      { message: "Record an HTTP endpoint?", initialValue: false },
+      { message: "Record a SOCKS endpoint?", initialValue: true },
+      { initialValue: `127.0.0.1:${socks.port}` },
+    ]);
+    expect(savedConfig(fake)).toEqual({ version: 1, proxy: externalProxy({ socks }) });
+  });
+
+  test("offers a built-in proxy's tunnel, key and ports back", async () => {
+    const fake = createFakeSystem();
+    fake.onPath.set("autossh", "/opt/homebrew/bin/autossh");
+    fake.onPath.set("privoxy", "/opt/homebrew/bin/privoxy");
+    fake.files.set("/home/test/.ssh/id_ed25519", "private");
+    fake.files.set("/home/test/.ssh/id_ed25519.pub", "ssh-ed25519 AAAA me@laptop");
+    fake.files.set("/home/test/.ssh/work", "private");
+    fake.files.set("/home/test/.ssh/work.pub", "ssh-ed25519 AAAA me@work");
+    const proxy = builtInProxy({
+      tunnel: { user: "me", host: "box.example", port: 2222, identityFile: "/home/test/.ssh/work" },
+      socksPort: 1081,
+      httpPort: 8119,
+    });
+    writeFakeConfig(fake, proxy);
+    fake.answers.push(
+      USE_DEFAULT,
+      USE_DEFAULT,
+      "other.example",
+      USE_DEFAULT,
+      USE_DEFAULT,
+      USE_DEFAULT,
+      USE_DEFAULT,
+      USE_DEFAULT,
+      false,
+    );
+
+    await runCli(["init"], fake.system);
+
+    expect(fake.questions.slice(0, 7)).toMatchObject([
+      { message: "Proxy source", initialValue: "built-in" },
+      { message: "ssh user", initialValue: "me" },
+      { message: "ssh host", initialValue: "box.example" },
+      { message: "ssh port", initialValue: "2222" },
+      { message: "ssh key", initialValue: "/home/test/.ssh/work" },
+      { message: "SOCKS port", initialValue: "1081" },
+      { message: "HTTP port", initialValue: "8119" },
+    ]);
+    expect(savedConfig(fake)).toEqual({
+      version: 1,
+      proxy: { ...proxy, tunnel: { ...proxy.tunnel, host: "other.example" } },
+    });
+  });
+
+  test("offers the keys in ssh-agent back when the tunnel names no key file", async () => {
+    const fake = createFakeSystem();
+    fake.onPath.set("autossh", "/opt/homebrew/bin/autossh");
+    fake.onPath.set("privoxy", "/opt/homebrew/bin/privoxy");
+    fake.files.set("/home/test/.ssh/id_ed25519", "private");
+    fake.files.set("/home/test/.ssh/id_ed25519.pub", "ssh-ed25519 AAAA me@laptop");
+    writeFakeConfig(fake, builtInProxy());
+    fake.answers.push(USE_DEFAULT, USE_DEFAULT, USE_DEFAULT, USE_DEFAULT, CANCEL);
+
+    await runCli(["init"], fake.system);
+
+    expect(fake.questions.at(-1)).toMatchObject({ message: "ssh key", initialValue: "ssh-agent" });
+  });
+
+  test("offers a key file typed in as a path back through the same two questions", async () => {
+    const fake = createFakeSystem();
+    fake.onPath.set("autossh", "/opt/homebrew/bin/autossh");
+    fake.onPath.set("privoxy", "/opt/homebrew/bin/privoxy");
+    fake.files.set("/home/test/keys/box", "private");
+    writeFakeConfig(
+      fake,
+      builtInProxy({
+        tunnel: { user: "me", host: "box.example", port: 22, identityFile: "/home/test/keys/box" },
+      }),
+    );
+    fake.answers.push(USE_DEFAULT, USE_DEFAULT, USE_DEFAULT, USE_DEFAULT, USE_DEFAULT, CANCEL);
+
+    await runCli(["init"], fake.system);
+
+    expect(fake.questions.slice(-2)).toMatchObject([
+      { message: "ssh key", initialValue: "another-file" },
+      { message: "Identity file", initialValue: "/home/test/keys/box" },
+    ]);
+  });
+
+  test("switching the source starts that source from its defaults", async () => {
+    const fake = createFakeSystem();
+    writeFakeConfig(fake, builtInProxy());
+    fake.answers.push("external", true, CANCEL);
+
+    await runCli(["init"], fake.system);
+
+    expect(fake.questions.slice(1)).toMatchObject([
+      { message: "Record an HTTP endpoint?", initialValue: true },
+      { initialValue: "127.0.0.1:8118" },
+    ]);
+  });
+});
+
 describe("prx run on a first run", () => {
   test("starts the wizard when there is no config, then launches", async () => {
     const http = await pool.open("live");

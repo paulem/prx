@@ -68,22 +68,27 @@ export async function runInit(command: InitCommand): Promise<number> {
 export async function initWizard(command: InitCommand): Promise<Config> {
   const { system, reporter } = command;
   reporter.step("", (output) => clack.intro(bold("prx init"), { output }));
+  const existing = await existingProxy(system);
   const source = answerOrCancel(
-    await system.prompt.select<"external" | "built-in">({
+    await system.prompt.select<ProxyConfig["source"]>({
       message: "Proxy source",
       options: [
         { value: "external", label: "External proxy, something else runs it" },
         { value: "built-in", label: "Built-in proxy, prx runs an ssh tunnel" },
       ],
+      initialValue: existing?.source,
     }),
   );
 
-  const existing = await existingProxy(system);
   const running = await runningBuiltInProxy(system, existing);
   const proxy =
     source === "external"
-      ? await askExternalProxy(command)
-      : await askBuiltInProxy(command, running);
+      ? await askExternalProxy(command, existing?.source === "external" ? existing : undefined)
+      : await askBuiltInProxy(
+          command,
+          existing?.source === "built-in" ? existing : undefined,
+          running,
+        );
   const bypass = await askBypass(command, existing?.bypass ?? []);
   const config: Config = { version: 1, proxy: bypass.length > 0 ? { ...proxy, bypass } : proxy };
   await writeConfig(system, config);
@@ -190,9 +195,9 @@ async function askBypass(command: InitCommand, initial: string[]): Promise<strin
   return parsed.entries;
 }
 
-// The wizard rewrites the whole config, so a re-run offers back what the current one bypasses
-// rather than dropping it, and knows which ports the running proxy holds; a config too broken
-// to read simply has nothing to offer
+// The wizard rewrites the whole config, so a re-run offers back every answer the current one
+// holds, leaving only the changed setting to type, and knows which ports the running proxy
+// holds; a config too broken to read simply has nothing to offer
 async function existingProxy(system: SystemAdapter): Promise<ProxyConfig | undefined> {
   try {
     return (await readConfig(system)).proxy;
@@ -227,30 +232,40 @@ function sameProcesses(running: BuiltInProxyConfig, proxy: BuiltInProxyConfig): 
 // The dependency check comes first so a missing binary is reported before any typing
 async function askBuiltInProxy(
   command: InitCommand,
+  existing: BuiltInProxyConfig | undefined,
   running: BuiltInProxyConfig | undefined,
 ): Promise<BuiltInProxyConfig> {
   await findDependencies(command.system);
-  const tunnel = await askTunnel(command);
+  const tunnel = await askTunnel(command, existing?.tunnel);
   const ownPorts = running === undefined ? [] : [running.socksPort, running.httpPort];
   const socksPort = await askFreePort(
     command,
     "SOCKS port",
-    DEFAULT_SOCKS_PORT,
+    String(existing?.socksPort ?? DEFAULT_SOCKS_PORT),
     ownPorts,
     () => undefined,
   );
-  const httpPort = await askFreePort(command, "HTTP port", DEFAULT_HTTP_PORT, ownPorts, (port) =>
-    port === socksPort ? "Must differ from the SOCKS port" : undefined,
+  const httpPort = await askFreePort(
+    command,
+    "HTTP port",
+    String(existing?.httpPort ?? DEFAULT_HTTP_PORT),
+    ownPorts,
+    (port) => (port === socksPort ? "Must differ from the SOCKS port" : undefined),
   );
   return { source: "built-in", tunnel, socksPort, httpPort };
 }
 
-async function askTunnel(command: InitCommand): Promise<TunnelConfig> {
+async function askTunnel(
+  command: InitCommand,
+  existing: TunnelConfig | undefined,
+): Promise<TunnelConfig> {
   const { system } = command;
-  const user = await askText(system, "ssh user", "", requireNonBlank);
-  const host = await askText(system, "ssh host", "", requireHost);
-  const port = Number(await askText(system, "ssh port", DEFAULT_SSH_PORT, requirePort));
-  const identityFile = await askIdentity(command, host);
+  const user = await askText(system, "ssh user", existing?.user ?? "", requireNonBlank);
+  const host = await askText(system, "ssh host", existing?.host ?? "", requireHost);
+  const port = Number(
+    await askText(system, "ssh port", String(existing?.port ?? DEFAULT_SSH_PORT), requirePort),
+  );
+  const identityFile = await askIdentity(command, host, existing);
   if (identityFile === undefined) {
     return { user, host, port };
   }
@@ -266,9 +281,14 @@ interface SshKey {
 /**
  * Offers the keys found in ~/.ssh first, since a key file keeps working after a reboot while
  * ssh-agent forgets its identities; a key outside ~/.ssh is typed in as a path. The key that
- * ~/.ssh/config names for the host is preselected, since ssh would have used it interactively
+ * ~/.ssh/config names for the host is preselected, since ssh would have used it interactively;
+ * on a re-run the current tunnel's choice comes before that
  */
-async function askIdentity(command: InitCommand, host: string): Promise<string | undefined> {
+async function askIdentity(
+  command: InitCommand,
+  host: string,
+  existing: TunnelConfig | undefined,
+): Promise<string | undefined> {
   const { system } = command;
   const keys = await listSshKeys(system, host);
   const choice = answerOrCancel(
@@ -280,24 +300,40 @@ async function askIdentity(command: InitCommand, host: string): Promise<string |
         { value: ANOTHER_FILE, label: "Another file" },
       ],
       initialValue:
-        keys.find((key) => key.hint?.includes(SSH_CONFIG_HINT))?.path ?? keys[0]?.path ?? USE_AGENT,
+        existing === undefined ? suggestedIdentity(keys) : existingIdentity(keys, existing),
     }),
   );
   if (choice === USE_AGENT) {
     return undefined;
   }
   if (choice === ANOTHER_FILE) {
-    return askIdentityPath(command);
+    return askIdentityPath(command, existing?.identityFile ?? "");
   }
   return choice;
 }
 
+function suggestedIdentity(keys: SshKey[]): string {
+  return (
+    keys.find((key) => key.hint?.includes(SSH_CONFIG_HINT))?.path ?? keys[0]?.path ?? USE_AGENT
+  );
+}
+
+// A key file that is not among the listed ones was typed in as a path, so that is offered again
+function existingIdentity(keys: SshKey[], existing: TunnelConfig): string {
+  if (existing.identityFile === undefined) {
+    return USE_AGENT;
+  }
+  return keys.some((key) => key.path === existing.identityFile)
+    ? existing.identityFile
+    : ANOTHER_FILE;
+}
+
 // Whether the file exists needs the OS, which a validator cannot reach, so a missing file is
 // reported after the answer and the question is asked again
-async function askIdentityPath(command: InitCommand): Promise<string> {
+async function askIdentityPath(command: InitCommand, initialValue: string): Promise<string> {
   const { system } = command;
   for (;;) {
-    const input = await askText(system, "Identity file", "", requireNonBlank);
+    const input = await askText(system, "Identity file", initialValue, requireNonBlank);
     const path = expandHome(system, input.trim());
     if (await system.pathExists(path)) {
       return path;
@@ -431,9 +467,15 @@ function expandHome(system: SystemAdapter, path: string): string {
   return path;
 }
 
-async function askExternalProxy(command: InitCommand): Promise<ExternalProxyConfig> {
+async function askExternalProxy(
+  command: InitCommand,
+  existing: ExternalProxyConfig | undefined,
+): Promise<ExternalProxyConfig> {
   const { system, reporter, probeTimeoutMs } = command;
-  const proxy: ExternalProxyConfig = { source: "external", endpoints: await askEndpoints(command) };
+  const proxy: ExternalProxyConfig = {
+    source: "external",
+    endpoints: await askEndpoints(command, existing?.endpoints),
+  };
 
   const reports = await reporter.wait("Probing endpoints", () =>
     probeEndpoints(proxy, probeTimeoutMs),
@@ -453,7 +495,10 @@ async function askExternalProxy(command: InitCommand): Promise<ExternalProxyConf
   return proxy;
 }
 
-async function askEndpoints(command: InitCommand): Promise<ExternalProxyConfig["endpoints"]> {
+async function askEndpoints(
+  command: InitCommand,
+  existing: ExternalProxyConfig["endpoints"] | undefined,
+): Promise<ExternalProxyConfig["endpoints"]> {
   const { system } = command;
   for (;;) {
     const endpoints: ExternalProxyConfig["endpoints"] = {};
@@ -461,11 +506,12 @@ async function askEndpoints(command: InitCommand): Promise<ExternalProxyConfig["
       const record = answerOrCancel(
         await system.prompt.confirm({
           message: RECORD_QUESTIONS[type],
-          initialValue: RECORD_BY_DEFAULT[type],
+          initialValue:
+            existing === undefined ? RECORD_BY_DEFAULT[type] : existing[type] !== undefined,
         }),
       );
       if (record) {
-        endpoints[type] = await askAddress(system, type);
+        endpoints[type] = await askAddress(system, type, existing?.[type]);
       }
     }
     if (Object.keys(endpoints).length > 0) {
@@ -475,11 +521,16 @@ async function askEndpoints(command: InitCommand): Promise<ExternalProxyConfig["
   }
 }
 
-async function askAddress(system: SystemAdapter, type: EndpointType): Promise<Address> {
+async function askAddress(
+  system: SystemAdapter,
+  type: EndpointType,
+  existing: Address | undefined,
+): Promise<Address> {
   const input = answerOrCancel(
     await system.prompt.text({
       message: `${ENDPOINT_LABELS[type]} endpoint (${addressFormatHint(type)})`,
-      initialValue: DEFAULT_ADDRESSES[type],
+      initialValue:
+        existing === undefined ? DEFAULT_ADDRESSES[type] : `${existing.host}:${existing.port}`,
       validate(candidate) {
         const parsed = parseEndpointAddress(type, candidate);
         return parsed.ok ? undefined : parsed.message;

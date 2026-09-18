@@ -79,7 +79,7 @@ For a built-in proxy the wizard first checks that `autossh` and `privoxy` are in
 
 Both paths then ask which hosts bypass the proxy, as one comma-separated line, empty for none. A re-run offers the current list back, so changing proxies never drops it. Entries are checked as they are typed: `.ru` is a whole zone, `ru` is turned down as the host it would otherwise match.
 
-Both paths end by listing the presets with whether each app was found on this machine. Cancelling anywhere leaves the existing config untouched. Re-run the wizard any time to change the proxy.
+Both paths end by listing the presets with whether each app was found on this machine. Cancelling anywhere leaves the existing config untouched. Re-run the wizard any time to change the proxy: every question offers the current config's answer back, so Enter keeps a setting and only the one you came to change needs typing. Switching the source starts the other one from its defaults.
 
 ### `prx up`
 
