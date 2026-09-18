@@ -23,6 +23,14 @@ import {
 } from "../config.ts";
 import { PrxError } from "../errors.ts";
 import type { Reporter } from "../output.ts";
+import {
+  addToAgentCommand,
+  identityStatus,
+  needsAgent,
+  PUBLIC_KEY_SUFFIX,
+  readIdentityStatus,
+  type IdentityStatus,
+} from "../ssh-keys.ts";
 import { bold, cyan, dim, pathLink, symbol, table, tildePath, type Cell } from "../style.ts";
 import type { PromptAnswer, SystemAdapter } from "../system.ts";
 import { formatPresetListing, listPresets, presetRows, type PresetListing } from "./list.ts";
@@ -50,7 +58,6 @@ const RECORD_BY_DEFAULT: Record<EndpointType, boolean> = { http: true, socks: fa
 const DEFAULT_SSH_PORT = "22";
 const SSH_DIR = ".ssh";
 const SSH_CONFIG = "config";
-const PUBLIC_KEY_SUFFIX = ".pub";
 const SSH_CONFIG_HINT = "named in ~/.ssh/config";
 const USE_AGENT = "ssh-agent";
 const ANOTHER_FILE = "another-file";
@@ -282,7 +289,8 @@ interface SshKey {
  * Offers the keys found in ~/.ssh first, since a key file keeps working after a reboot while
  * ssh-agent forgets its identities; a key outside ~/.ssh is typed in as a path. The key that
  * ~/.ssh/config names for the host is preselected, since ssh would have used it interactively;
- * on a re-run the current tunnel's choice comes before that
+ * on a re-run the current tunnel's choice comes before that. Each key says whether the tunnel
+ * could use it today, since a passphrase-protected one is unusable until ssh-agent holds it
  */
 async function askIdentity(
   command: InitCommand,
@@ -290,13 +298,14 @@ async function askIdentity(
   existing: TunnelConfig | undefined,
 ): Promise<string | undefined> {
   const { system } = command;
-  const keys = await listSshKeys(system, host);
+  const agentKeys = await system.sshAgentKeys();
+  const keys = await listSshKeys(system, host, agentKeys);
   const choice = answerOrCancel(
     await system.prompt.select<string>({
       message: "ssh key",
       options: [
         ...keys.map((key) => ({ value: key.path, label: key.name, hint: key.hint })),
-        { value: USE_AGENT, label: "Keys in ssh-agent" },
+        { value: USE_AGENT, label: "Keys in ssh-agent", hint: agentHint(agentKeys.length) },
         { value: ANOTHER_FILE, label: "Another file" },
       ],
       initialValue:
@@ -304,12 +313,37 @@ async function askIdentity(
     }),
   );
   if (choice === USE_AGENT) {
+    if (agentKeys.length === 0) {
+      warn(command, "ssh-agent holds no keys, so the tunnel has nothing to authenticate with");
+    }
     return undefined;
   }
-  if (choice === ANOTHER_FILE) {
-    return askIdentityPath(command, existing?.identityFile ?? "");
+  const identityFile =
+    choice === ANOTHER_FILE ? await askIdentityPath(command, existing?.identityFile ?? "") : choice;
+  await warnWhenLocked(command, identityFile);
+  return identityFile;
+}
+
+function agentHint(count: number): string {
+  if (count === 0) {
+    return "empty";
   }
-  return choice;
+  return count === 1 ? "1 key loaded" : `${count} keys loaded`;
+}
+
+// The wizard saves the key either way: the passphrase is added outside prx, and saying so here
+// beats letting the tunnel fail later with nothing but ssh's "Permission denied"
+async function warnWhenLocked(command: InitCommand, identityFile: string): Promise<void> {
+  const { system } = command;
+  if (!needsAgent(await readIdentityStatus(system, identityFile))) {
+    return;
+  }
+  const key = tildePath(system.homeDir(), identityFile);
+  warn(
+    command,
+    `${key} needs a passphrase and is not in ssh-agent, so the tunnel cannot start yet. ` +
+      `Add it with: ${addToAgentCommand(key)}`,
+  );
 }
 
 function suggestedIdentity(keys: SshKey[]): string {
@@ -345,7 +379,11 @@ async function askIdentityPath(command: InitCommand, initialValue: string): Prom
 // A private key is recognised by its public half next to it, the way ssh-keygen writes them;
 // the public key's comment tells keys with generic names apart. A key that ~/.ssh/config names
 // for the host but that has no public half is listed too, ahead of the rest
-async function listSshKeys(system: SystemAdapter, host: string): Promise<SshKey[]> {
+async function listSshKeys(
+  system: SystemAdapter,
+  host: string,
+  agentKeys: string[],
+): Promise<SshKey[]> {
   const dir = join(system.homeDir(), SSH_DIR);
   const [names, configured] = await Promise.all([
     system.listDirectory(dir),
@@ -358,10 +396,13 @@ async function listSshKeys(system: SystemAdapter, host: string): Promise<SshKey[
       .filter((name) => names.includes(name))
       .map(async (name) => {
         const path = join(dir, name);
-        const comment = publicKeyComment(
-          await system.readTextFile(join(dir, `${name}${PUBLIC_KEY_SUFFIX}`)),
-        );
-        const hints = path === configured ? [comment, SSH_CONFIG_HINT] : [comment];
+        const [privateKey, publicKey] = await Promise.all([
+          system.readTextFile(path),
+          system.readTextFile(join(dir, `${name}${PUBLIC_KEY_SUFFIX}`)),
+        ]);
+        const comment = publicKeyComment(publicKey);
+        const status = statusHint(identityStatus(privateKey, publicKey, agentKeys));
+        const hints = path === configured ? [comment, SSH_CONFIG_HINT, status] : [comment, status];
         return { path, name, hint: joinHints(hints) };
       }),
   );
@@ -377,6 +418,15 @@ async function listSshKeys(system: SystemAdapter, host: string): Promise<SshKey[
     hint: SSH_CONFIG_HINT,
   };
   return [extra, ...keys];
+}
+
+// Only a passphrase says anything the tunnel cares about: an unencrypted key works whether or
+// not ssh-agent holds it, so it gets no hint at all
+function statusHint(status: IdentityStatus): string | undefined {
+  if (!status.encrypted) {
+    return undefined;
+  }
+  return status.agent === "loaded" ? "passphrase, in ssh-agent" : "passphrase, not in ssh-agent";
 }
 
 function joinHints(hints: Array<string | undefined>): string | undefined {

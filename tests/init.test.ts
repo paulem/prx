@@ -7,6 +7,7 @@ import {
   externalProxy,
   FAKE_CONFIG_PATH,
   FAKE_STATE_DIR,
+  opensshPrivateKey,
   USE_DEFAULT,
   writeFakeConfig,
   type FakeSystem,
@@ -413,6 +414,8 @@ describe("prx init with a built-in proxy", () => {
     const fake = createFakeSystem();
     fake.onPath.set("autossh", AUTOSSH);
     fake.onPath.set("privoxy", PRIVOXY);
+    // A loaded agent is the unremarkable case; an empty one has its own tests
+    fake.agentKeys.push("ssh-ed25519 AAAAloaded someone@elsewhere");
     return fake;
   }
 
@@ -473,7 +476,7 @@ describe("prx init with a built-in proxy", () => {
         kind: "select",
         message: "ssh key",
         options: [
-          { value: "ssh-agent", label: "Keys in ssh-agent" },
+          { value: "ssh-agent", label: "Keys in ssh-agent", hint: "1 key loaded" },
           { value: "another-file", label: "Another file" },
         ],
         initialValue: "ssh-agent",
@@ -532,7 +535,7 @@ describe("prx init with a built-in proxy", () => {
       options: [
         { value: "/home/test/.ssh/id_ed25519_do", label: "id_ed25519_do", hint: "me@laptop" },
         { value: "/home/test/.ssh/id_rsa", label: "id_rsa", hint: undefined },
-        { value: "ssh-agent", label: "Keys in ssh-agent" },
+        { value: "ssh-agent", label: "Keys in ssh-agent", hint: "1 key loaded" },
         { value: "another-file", label: "Another file" },
       ],
       initialValue: "/home/test/.ssh/id_ed25519_do",
@@ -540,6 +543,97 @@ describe("prx init with a built-in proxy", () => {
     expect(savedConfig(fake)).toMatchObject({
       proxy: { tunnel: { identityFile: "/home/test/.ssh/id_rsa" } },
     });
+  });
+
+  test("says of every passphrase-protected key whether ssh-agent holds it", async () => {
+    const fake = withDependencies();
+    fake.agentKeys.push("ssh-ed25519 AAAAunlocked me@laptop");
+    fake.files.set("/home/test/.ssh/locked", opensshPrivateKey("aes256-ctr"));
+    fake.files.set("/home/test/.ssh/locked.pub", "ssh-ed25519 AAAAlocked me@laptop\n");
+    fake.files.set("/home/test/.ssh/unlocked", opensshPrivateKey("aes256-ctr"));
+    fake.files.set("/home/test/.ssh/unlocked.pub", "ssh-ed25519 AAAAunlocked me@laptop\n");
+    fake.files.set("/home/test/.ssh/plain", opensshPrivateKey("none"));
+    fake.files.set("/home/test/.ssh/plain.pub", "ssh-ed25519 AAAAplain me@laptop\n");
+    fake.answers.push(
+      "built-in",
+      "me",
+      "box.example",
+      USE_DEFAULT,
+      "/home/test/.ssh/plain",
+      USE_DEFAULT,
+      USE_DEFAULT,
+      USE_DEFAULT,
+      false,
+    );
+
+    await runCli(["init"], fake.system);
+
+    expect(fake.questions[4]).toMatchObject({
+      message: "ssh key",
+      options: [
+        { value: "/home/test/.ssh/locked", hint: "me@laptop, passphrase, not in ssh-agent" },
+        { value: "/home/test/.ssh/plain", hint: "me@laptop" },
+        { value: "/home/test/.ssh/unlocked", hint: "me@laptop, passphrase, in ssh-agent" },
+        { value: "ssh-agent", hint: "2 keys loaded" },
+        { value: "another-file" },
+      ],
+    });
+    expect(fake.stdout()).not.toContain("ssh-add");
+  });
+
+  test("picking a locked key warns that the tunnel cannot start until it is added", async () => {
+    const fake = withDependencies();
+    fake.agentKeys.length = 0;
+    fake.files.set("/home/test/.ssh/locked", opensshPrivateKey("aes256-ctr"));
+    fake.files.set("/home/test/.ssh/locked.pub", "ssh-ed25519 AAAAlocked me@laptop\n");
+    fake.answers.push(
+      "built-in",
+      "me",
+      "box.example",
+      USE_DEFAULT,
+      "/home/test/.ssh/locked",
+      USE_DEFAULT,
+      USE_DEFAULT,
+      USE_DEFAULT,
+      false,
+    );
+
+    const exitCode = await runCli(["init"], fake.system);
+
+    expect(exitCode).toBe(0);
+    expect(fake.stdout()).toContain(
+      "~/.ssh/locked needs a passphrase and is not in ssh-agent, so the tunnel cannot start yet. " +
+        "Add it with: ssh-add --apple-use-keychain ~/.ssh/locked\n",
+    );
+    // The choice is still saved: the passphrase is added outside prx
+    expect(savedConfig(fake)).toMatchObject({
+      proxy: { tunnel: { identityFile: "/home/test/.ssh/locked" } },
+    });
+  });
+
+  test("choosing an empty ssh-agent warns that the tunnel has nothing to authenticate with", async () => {
+    const fake = withDependencies();
+    fake.agentKeys.length = 0;
+    fake.answers.push(
+      "built-in",
+      "me",
+      "box.example",
+      USE_DEFAULT,
+      USE_DEFAULT,
+      USE_DEFAULT,
+      USE_DEFAULT,
+      USE_DEFAULT,
+      false,
+    );
+
+    await runCli(["init"], fake.system);
+
+    expect(fake.questions[4]).toMatchObject({
+      options: [{ value: "ssh-agent", hint: "empty" }, { value: "another-file" }],
+    });
+    expect(fake.stdout()).toContain(
+      "ssh-agent holds no keys, so the tunnel has nothing to authenticate with\n",
+    );
   });
 
   test("preselects the key that ~/.ssh/config names for the host", async () => {
