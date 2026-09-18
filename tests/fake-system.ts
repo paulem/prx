@@ -65,6 +65,8 @@ export interface FakeSystem {
   launches: LaunchRequest[];
   /** Apps the fake reports as having a running instance */
   running: Set<string>;
+  /** Public key lines the fake reports as loaded in ssh-agent */
+  agentKeys: string[];
   /** Every background process the CLI started, in order; each gets the next pid from 1001 */
   backgroundStarts: BackgroundRequest[];
   /** Pids the fake reports as alive; a started process is alive until it is signalled */
@@ -100,6 +102,7 @@ export function createFakeSystem(): FakeSystem {
   const spawns: SpawnRequest[] = [];
   const launches: LaunchRequest[] = [];
   const running = new Set<string>();
+  const agentKeys: string[] = [];
   const backgroundStarts: BackgroundRequest[] = [];
   const alivePids = new Set<number>();
   const signals: SentSignal[] = [];
@@ -186,6 +189,7 @@ export function createFakeSystem(): FakeSystem {
         alivePids.delete(pid);
       },
       isPortFree: async (port) => !busyPorts.has(port),
+      sshAgentKeys: async () => [...agentKeys],
       prompt: {
         async select(question) {
           questions.push({
@@ -251,6 +255,7 @@ export function createFakeSystem(): FakeSystem {
     spawnOutcome: { exitCode: 0, signal: null },
     launches,
     running,
+    agentKeys,
     backgroundStarts,
     alivePids,
     signals,
@@ -274,6 +279,20 @@ export function externalProxy(endpoints: Partial<Record<EndpointType, Address>>)
       Object.entries(endpoints).map(([type, { host, port }]) => [type, { host, port }]),
     ),
   };
+}
+
+/**
+ * An OpenSSH private key that names the given cipher, which is all prx reads it for: "none" is
+ * what an unencrypted key carries, any other name means a passphrase
+ */
+export function opensshPrivateKey(cipher: string): string {
+  const name = Buffer.from(cipher, "utf8");
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(name.length);
+  const body = Buffer.concat([Buffer.from("openssh-key-v1\0", "latin1"), length, name]).toString(
+    "base64",
+  );
+  return `-----BEGIN OPENSSH PRIVATE KEY-----\n${body}\n-----END OPENSSH PRIVATE KEY-----\n`;
 }
 
 /** A built-in proxy with a plain tunnel and the default ports, unless overridden */

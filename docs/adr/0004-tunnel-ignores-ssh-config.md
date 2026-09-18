@@ -4,7 +4,7 @@ The tunnel runs ssh in the background with no one to answer a prompt, so every o
 
 ## Consequences
 
-- A passphrase-protected key must already be in ssh-agent, since batch mode never prompts.
+- A passphrase-protected key must already be in ssh-agent, since batch mode never prompts. ssh reports a locked key and an unauthorized one alike, as `Permission denied (publickey)`, so prx reads the identity file and asks ssh-agent itself to tell them apart: a tunnel failure names the `ssh-add` command rather than the server.
 - Jump hosts, custom ciphers and other per-host ssh options are not available to the tunnel.
 - A `Host` alias cannot be used as the tunnel host; the real hostname is required.
 - `prx init` reads `~/.ssh/config` only to preselect the key it names for the host; what the tunnel uses is the saved `identityFile`, never the file itself.

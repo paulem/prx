@@ -4,7 +4,9 @@ import {
   builtInProxy,
   createFakeSystem,
   externalProxy,
+  FAKE_HOME,
   FAKE_STATE_DIR,
+  opensshPrivateKey,
   writeFakeConfig,
   type FakeSystem,
 } from "./fake-system.ts";
@@ -14,6 +16,7 @@ beforeAll(() => {
   trustProbeTarget();
 });
 
+const KEY_DIR = `${FAKE_HOME}/.ssh`;
 const pool = proxyPool();
 afterEach(() => pool.closeAll());
 
@@ -212,6 +215,62 @@ describe("prx status on a built-in proxy", () => {
         "Tunnel: me@box.example: Permission denied (publickey).\n" +
         `Logs are in ${FAKE_STATE_DIR}\n` +
         "Run prx init to pick a key file, or add one to ssh-agent with: ssh-add <path>\n",
+    );
+  });
+
+  test("a locked key is named as the reason the tunnel was denied, with the way to unlock it", async () => {
+    const http = await pool.closed();
+    const socks = await pool.closed();
+    const fake = createFakeSystem();
+    writeFakeConfig(
+      fake,
+      builtInProxy({
+        tunnel: { user: "me", host: "box.example", port: 22, identityFile: `${KEY_DIR}/id_box` },
+        socksPort: socks.port,
+        httpPort: http.port,
+      }),
+    );
+    markRunning(fake);
+    fake.files.set(`${KEY_DIR}/id_box`, opensshPrivateKey("aes256-ctr"));
+    fake.files.set(`${KEY_DIR}/id_box.pub`, "ssh-ed25519 AAAAbox me@laptop\n");
+    fake.files.set(
+      `${FAKE_STATE_DIR}/autossh.log`,
+      "me@box.example: Permission denied (publickey).\n",
+    );
+
+    await statusOf(fake);
+
+    expect(fake.stdout()).toContain(
+      "~/.ssh/id_box needs a passphrase and the tunnel never prompts, " +
+        "so add it with: ssh-add --apple-use-keychain ~/.ssh/id_box\n",
+    );
+  });
+
+  test("a key ssh-agent already holds is reported as one the host has not authorised", async () => {
+    const http = await pool.closed();
+    const socks = await pool.closed();
+    const fake = createFakeSystem();
+    writeFakeConfig(
+      fake,
+      builtInProxy({
+        tunnel: { user: "me", host: "box.example", port: 22, identityFile: `${KEY_DIR}/id_box` },
+        socksPort: socks.port,
+        httpPort: http.port,
+      }),
+    );
+    markRunning(fake);
+    fake.files.set(`${KEY_DIR}/id_box`, opensshPrivateKey("aes256-ctr"));
+    fake.files.set(`${KEY_DIR}/id_box.pub`, "ssh-ed25519 AAAAbox me@laptop\n");
+    fake.agentKeys.push("ssh-ed25519 AAAAbox unlocked-at-some-point");
+    fake.files.set(
+      `${FAKE_STATE_DIR}/autossh.log`,
+      "me@box.example: Permission denied (publickey).\n",
+    );
+
+    await statusOf(fake);
+
+    expect(fake.stdout()).toContain(
+      "Authorize ~/.ssh/id_box on box.example, or run prx init to pick another key.\n",
     );
   });
 

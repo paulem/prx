@@ -52,6 +52,14 @@ _Avoid_: health check, ping, liveness check, connectivity test
 The state of an endpoint whose probe succeeded within the timeout.
 _Avoid_: up, healthy, reachable, working
 
+**Identity**:
+The ssh key the tunnel authenticates with: a key file the config names, or whatever ssh-agent holds when it names none.
+_Avoid_: credential, auth, ssh key file
+
+**Locked identity**:
+An identity whose key file needs a passphrase while ssh-agent does not hold it. The tunnel can never use one, because it never prompts.
+_Avoid_: encrypted key, unavailable key
+
 **Tunnel failure**:
 The last line ssh wrote to the autossh log, reported when the proxy is running but an endpoint is not live.
 _Avoid_: ssh error, log tail, diagnosis

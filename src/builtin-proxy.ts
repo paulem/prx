@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { BUILT_IN_HOST, type BuiltInProxyConfig } from "./config.ts";
 import { PrxError } from "./errors.ts";
+import { addToAgentCommand, needsAgent, readIdentityStatus } from "./ssh-keys.ts";
 import { tildePath } from "./style.ts";
 import type { BackgroundRequest, SystemAdapter } from "./system.ts";
 
@@ -94,23 +95,27 @@ export async function readTunnelFailure(
   if (message === undefined) {
     return undefined;
   }
-  return { message, hint: tunnelHint(system, proxy, message) };
+  return { message, hint: await tunnelHint(system, proxy, message) };
 }
 
 const UNREACHABLE_HOST_PATTERN =
   /Could not resolve hostname|Connection refused|Connection timed out|Network is unreachable|No route to host/;
 
-function tunnelHint(
+async function tunnelHint(
   system: SystemAdapter,
   proxy: BuiltInProxyConfig,
   message: string,
-): string | undefined {
+): Promise<string | undefined> {
   const { tunnel } = proxy;
   if (message.includes("Permission denied")) {
     if (tunnel.identityFile === undefined) {
       return "Run prx init to pick a key file, or add one to ssh-agent with: ssh-add <path>";
     }
     const key = tildePath(system.homeDir(), tunnel.identityFile);
+    // A locked key looks exactly like an unauthorized one to ssh, so say which it is
+    if (needsAgent(await readIdentityStatus(system, tunnel.identityFile))) {
+      return `${key} needs a passphrase and the tunnel never prompts, so add it with: ${addToAgentCommand(key)}`;
+    }
     return `Authorize ${key} on ${tunnel.host}, or run prx init to pick another key.`;
   }
   if (message.startsWith("Timeout, server")) {

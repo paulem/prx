@@ -127,6 +127,8 @@ export interface SystemAdapter {
   signalProcess: (pid: number, signal: NodeJS.Signals) => Promise<void>;
   /** Whether nothing listens on the port on 127.0.0.1 */
   isPortFree: (port: number) => Promise<boolean>;
+  /** The public keys ssh-agent holds, one per line; empty when it holds none or there is no agent */
+  sshAgentKeys: () => Promise<string[]>;
   prompt: Prompter;
 }
 
@@ -278,6 +280,14 @@ export function createNodeSystemAdapter(env: NodeJS.ProcessEnv = process.env): S
         server.listen(port, "127.0.0.1", () => server.close(() => resolve(true)));
       });
     },
+    sshAgentKeys() {
+      // ssh-add exits 1 when the agent holds nothing and 2 when there is no agent to ask
+      return new Promise((resolve) => {
+        execFile("ssh-add", ["-L"], (error, stdout) => {
+          resolve(error === null ? nonEmptyLines(stdout) : []);
+        });
+      });
+    },
     prompt: {
       async select<T extends string>(question: SelectQuestion<T>) {
         // clack types options through a conditional on the value type, which a generic cannot satisfy
@@ -361,6 +371,13 @@ function truncate(text: string, room: number): string {
     return "";
   }
   return text.length <= room ? text : `${text.slice(0, room - 1)}${ELLIPSIS}`;
+}
+
+function nonEmptyLines(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "");
 }
 
 function answerFrom<T>(value: T | symbol): PromptAnswer<T> {
