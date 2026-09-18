@@ -1,5 +1,6 @@
 import * as clack from "@clack/prompts";
 import { execFile, spawn } from "node:child_process";
+import { cyan } from "./style.ts";
 import {
   access,
   constants,
@@ -141,14 +142,7 @@ export function createNodeSystemAdapter(env: NodeJS.ProcessEnv = process.env): S
       const noColor = env.NO_COLOR !== undefined && env.NO_COLOR !== "";
       return process[stream].isTTY === true && !noColor;
     },
-    spinner() {
-      const spinner = clack.spinner({ output: process.stderr, withGuide: false });
-      return {
-        start: (message) => spinner.start(message),
-        message: (message) => spinner.message(message),
-        clear: () => spinner.clear(),
-      };
-    },
+    spinner: createSpinner,
     homeDir: homedir,
     configDir() {
       const base = env.XDG_CONFIG_HOME || join(homedir(), ".config");
@@ -310,6 +304,63 @@ export function createNodeSystemAdapter(env: NodeJS.ProcessEnv = process.env): S
       },
     },
   };
+}
+
+const SPINNER_FRAMES = ["◒", "◐", "◓", "◑"];
+const SPINNER_INTERVAL_MS = 80;
+const DEFAULT_COLUMNS = 80;
+/** Back to the start of the line, then erase all of it */
+const ERASE_LINE = "\r[2K";
+const ELLIPSIS = "…";
+
+/**
+ * prx's own spinner rather than clack's, which puts stdin in raw mode to swallow keystrokes
+ * while it turns. Raw mode suppresses SIGINT, so Ctrl-C became a silent exit 0, and whatever
+ * was typed ahead was eaten instead of reaching the shell. A wait is not a prompt, so this one
+ * only ever writes. The message is truncated to the terminal's width, which keeps a clear from
+ * having wrapped rows to erase, and the cursor stays visible, since a signal would otherwise
+ * leave it hidden for good
+ */
+function createSpinner(): Spinner {
+  let timer: NodeJS.Timeout | undefined;
+  let frame = 0;
+  let message = "";
+
+  function draw(): void {
+    const glyph = SPINNER_FRAMES[frame] as string;
+    process.stderr.write(`${ERASE_LINE}${cyan(glyph)}  ${truncate(message, columns() - 3)}`);
+    frame = (frame + 1) % SPINNER_FRAMES.length;
+  }
+
+  return {
+    start(first) {
+      message = first;
+      draw();
+      // Never unref'd: a wait that does not end should hold the process open for a Ctrl-C
+      timer = setInterval(draw, SPINNER_INTERVAL_MS);
+    },
+    message(next) {
+      message = next;
+    },
+    clear() {
+      clearInterval(timer);
+      timer = undefined;
+      process.stderr.write(ERASE_LINE);
+    },
+  };
+}
+
+// A pty nobody sized reports 0 columns, which would leave no room for the message at all
+function columns(): number {
+  const width = process.stderr.columns;
+  return width !== undefined && width > 0 ? width : DEFAULT_COLUMNS;
+}
+
+function truncate(text: string, room: number): string {
+  if (room <= 0) {
+    return "";
+  }
+  return text.length <= room ? text : `${text.slice(0, room - 1)}${ELLIPSIS}`;
 }
 
 function answerFrom<T>(value: T | symbol): PromptAnswer<T> {
