@@ -17,7 +17,13 @@ export interface Endpoint extends Address {
   type: EndpointType;
 }
 
-export interface ExternalProxyConfig {
+/** What every proxy carries, whichever source runs it */
+interface ProxyCommon {
+  /** Hosts whose traffic goes direct instead of through this proxy */
+  bypass?: string[];
+}
+
+export interface ExternalProxyConfig extends ProxyCommon {
   source: "external";
   endpoints: Partial<Record<EndpointType, Address>>;
 }
@@ -29,7 +35,7 @@ export interface TunnelConfig {
   identityFile?: string;
 }
 
-export interface BuiltInProxyConfig {
+export interface BuiltInProxyConfig extends ProxyCommon {
   source: "built-in";
   tunnel: TunnelConfig;
   socksPort: number;
@@ -111,6 +117,97 @@ export function parseEndpointAddress(type: EndpointType, input: string): ParsedA
 
 export const PORT_RANGE_MESSAGE = "Port must be between 1 and 65535";
 
+export type ParsedBypass = { ok: true; entry: string } | { ok: false; message: string };
+
+const HOSTNAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/;
+
+/**
+ * Reads one bypass entry, a host or a suffix, into the one spelling both NO_PROXY and Chrome's
+ * bypass list accept. prx never matches against an entry, each app does, so only the forms both
+ * honour get through: ports, address ranges and inner wildcards are turned down here
+ */
+export function parseBypassEntry(input: string): ParsedBypass {
+  const trimmed = input.trim();
+  if (trimmed === "") {
+    return { ok: false, message: "A bypass entry cannot be empty" };
+  }
+  if (/\s/.test(trimmed)) {
+    return { ok: false, message: "A bypass entry cannot contain spaces" };
+  }
+  if (trimmed.includes("://")) {
+    return { ok: false, message: "Write a host, not a URL" };
+  }
+  if (trimmed.includes("/") || trimmed.includes(":")) {
+    return { ok: false, message: "Ports and address ranges are not supported" };
+  }
+  const dotted = trimmed.startsWith("*.") ? trimmed.slice(1) : trimmed;
+  if (dotted.includes("*")) {
+    return { ok: false, message: "The only wildcard is a leading *." };
+  }
+  const isSuffix = dotted.startsWith(".");
+  const ascii = toAsciiHost(isSuffix ? dotted.slice(1) : dotted);
+  if (ascii === undefined) {
+    return { ok: false, message: "Write a hostname such as api.example.com" };
+  }
+  // A lone label is a zone somebody forgot the dot on: as a host it would match one machine
+  if (!isSuffix && !ascii.includes(".")) {
+    return { ok: false, message: `Write .${ascii} to bypass a whole zone` };
+  }
+  return { ok: true, entry: isSuffix ? `.${ascii}` : ascii };
+}
+
+// The URL parser carries the punycode conversion, so .рф is stored as both matchers read it.
+// It also quietly strips credentials, queries and paths, and a stripped entry would bypass more
+// than it says, so anything left over on the URL turns the entry down
+function toAsciiHost(host: string): string | undefined {
+  let url: URL;
+  try {
+    url = new URL(`https://${host}`);
+  } catch {
+    return undefined;
+  }
+  const isPlainHost =
+    url.username === "" &&
+    url.password === "" &&
+    url.port === "" &&
+    url.pathname === "/" &&
+    url.search === "" &&
+    url.hash === "";
+  if (!isPlainHost) {
+    return undefined;
+  }
+  return HOSTNAME.test(url.hostname) ? url.hostname : undefined;
+}
+
+export type ParsedBypassList = { ok: true; entries: string[] } | { ok: false; message: string };
+
+/** Reads the comma-separated list typed into the wizard; an empty answer means no bypass */
+export function parseBypassList(input: string): ParsedBypassList {
+  const entries: string[] = [];
+  for (const part of input.split(",")) {
+    if (part.trim() === "") {
+      continue;
+    }
+    const parsed = parseBypassEntry(part);
+    if (!parsed.ok) {
+      return { ok: false, message: parsed.message };
+    }
+    entries.push(parsed.entry);
+  }
+  return { ok: true, entries };
+}
+
+/** The proxy's bypass entries as the injections spell them; readConfig has already vetted them */
+export function bypassEntries(proxy: ProxyConfig): string[] {
+  return (proxy.bypass ?? []).map((entry) => {
+    const parsed = parseBypassEntry(entry);
+    if (!parsed.ok) {
+      throw new Error(`validated bypass entry failed to parse: ${parsed.message}`);
+    }
+    return parsed.entry;
+  });
+}
+
 export function isValidPort(port: unknown): port is number {
   return Number.isInteger(port) && (port as number) >= 1 && (port as number) <= 65535;
 }
@@ -162,10 +259,10 @@ function describeConfigProblem(value: unknown): string | undefined {
     return "proxy must be an object";
   }
   if (proxy.source === "external") {
-    return describeExternalProblem(proxy);
+    return describeExternalProblem(proxy) ?? describeBypassProblem(proxy.bypass);
   }
   if (proxy.source === "built-in") {
-    return describeBuiltInProblem(proxy);
+    return describeBuiltInProblem(proxy) ?? describeBypassProblem(proxy.bypass);
   }
   return 'proxy.source must be "external" or "built-in". Run prx init to write the current shape.';
 }
@@ -213,6 +310,22 @@ function describeBuiltInProblem(proxy: Record<string, unknown>): string | undefi
   }
   if (socksPort === httpPort) {
     return "proxy.socksPort and proxy.httpPort must differ";
+  }
+  return undefined;
+}
+
+function describeBypassProblem(bypass: unknown): string | undefined {
+  if (bypass === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(bypass) || bypass.some((entry) => typeof entry !== "string")) {
+    return "proxy.bypass must be an array of strings";
+  }
+  for (const entry of bypass) {
+    const parsed = parseBypassEntry(entry);
+    if (!parsed.ok) {
+      return `proxy.bypass entry ${JSON.stringify(entry)} is invalid. ${parsed.message}`;
+    }
   }
   return undefined;
 }

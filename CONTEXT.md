@@ -73,7 +73,7 @@ Everything on the command line after the app's name, handed to the app verbatim.
 _Avoid_: extra args, child args, rest args
 
 **Bypass**:
-Hosts whose traffic goes directly to the network instead of through the proxy. Always the local machine itself.
+Hosts whose traffic goes directly to the network instead of through the proxy. Always the local machine itself, plus the hosts the proxy's bypass list names.
 _Avoid_: exclusions, no-proxy list, whitelist
 
 **Hint**:

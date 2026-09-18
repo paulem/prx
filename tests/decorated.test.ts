@@ -7,6 +7,7 @@ import {
   createFakeSystem,
   externalProxy,
   FAKE_CONFIG_PATH,
+  USE_DEFAULT,
   writeFakeConfig,
   type FakeSystem,
 } from "./fake-system.ts";
@@ -380,7 +381,7 @@ describe("decorated init", () => {
     const http = await pool.open("live");
     const fake = decoratedFake();
     fake.onPath.set("claude", CLAUDE_PATH);
-    fake.answers.push("external", true, `127.0.0.1:${http.port}`, false);
+    fake.answers.push("external", true, `127.0.0.1:${http.port}`, false, USE_DEFAULT);
 
     const exitCode = await runCli(["init"], fake.system, { probeTimeoutMs: 1000 });
 
@@ -396,10 +397,21 @@ describe("decorated init", () => {
     expect(out).toMatch(/└  Next: prx run claude\n\n$/);
   });
 
+  test("the saved note carries the configured bypass", async () => {
+    const http = await pool.open("live");
+    const fake = decoratedFake();
+    fake.onPath.set("claude", CLAUDE_PATH);
+    fake.answers.push("external", true, `127.0.0.1:${http.port}`, false, ".sourcecraft.tech, .ru");
+
+    await runCli(["init"], fake.system, { probeTimeoutMs: 1000 });
+
+    expect(visible(fake.stdout())).toContain("│  Bypass  .sourcecraft.tech, .ru");
+  });
+
   test("tells a person with no app installed what to install", async () => {
     const http = await pool.open("live");
     const fake = decoratedFake();
-    fake.answers.push("external", true, `127.0.0.1:${http.port}`, false);
+    fake.answers.push("external", true, `127.0.0.1:${http.port}`, false, USE_DEFAULT);
 
     await runCli(["init"], fake.system, { probeTimeoutMs: 1000 });
 
@@ -411,7 +423,7 @@ describe("decorated init", () => {
   test("warns inside the frame when no endpoint is recorded", async () => {
     const http = await pool.open("live");
     const fake = decoratedFake();
-    fake.answers.push("external", false, false, true, `127.0.0.1:${http.port}`, false);
+    fake.answers.push("external", false, false, true, `127.0.0.1:${http.port}`, false, USE_DEFAULT);
 
     await runCli(["init"], fake.system, { probeTimeoutMs: 1000 });
 

@@ -62,6 +62,7 @@ describe("prx run chrome", () => {
           CHROME_PATH,
           "--args",
           `--proxy-server=http://127.0.0.1:${proxy?.port}`,
+          `--proxy-bypass-list=localhost,127.0.0.1,::1`,
           LANDING_URL,
         ],
       },
@@ -82,6 +83,7 @@ describe("prx run chrome", () => {
     expect(exitCode).toBe(0);
     expect(fake.launches[0]?.args.slice(4)).toEqual([
       `--proxy-server=socks5://127.0.0.1:${socks?.port}`,
+      `--proxy-bypass-list=localhost,127.0.0.1,::1`,
       LANDING_URL,
     ]);
     expect(fake.stderr()).toMatch(
@@ -111,6 +113,7 @@ describe("prx run chrome", () => {
     expect(exitCode).toBe(0);
     expect(fake.launches[0]?.args.slice(4)).toEqual([
       `--proxy-server=http://127.0.0.1:${proxy?.port}`,
+      `--proxy-bypass-list=localhost,127.0.0.1,::1`,
       LANDING_URL,
     ]);
   });
@@ -148,6 +151,7 @@ describe("prx run chrome", () => {
 
     expect(fake.launches[0]?.args.slice(4)).toEqual([
       `--proxy-server=http://127.0.0.1:${proxy?.port}`,
+      `--proxy-bypass-list=localhost,127.0.0.1,::1`,
       "--incognito",
       "https://example.com",
       LANDING_URL,

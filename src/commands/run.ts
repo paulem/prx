@@ -5,6 +5,7 @@ import {
   startBuiltInProxy,
 } from "../builtin-proxy.ts";
 import {
+  bypassEntries,
   endpointUrl,
   findEndpoint,
   readConfig,
@@ -70,24 +71,35 @@ export async function runRun(command: RunCommand): Promise<number> {
   }
 
   const latencyMs = await makeLive(command, preset, endpoint, config.proxy);
+  const bypass = bypassEntries(config.proxy);
 
   if (json) {
-    reporter.json({ preset: preset.name, endpoint, latencyMs });
+    reporter.json({
+      preset: preset.name,
+      endpoint,
+      latencyMs,
+      ...(bypass.length > 0 ? { bypass } : {}),
+    });
   } else {
     const url = endpointUrl(endpoint);
     const plainSummary =
       latencyMs === null ? "not probed (--no-check)" : `is live (${latencyMs} ms)`;
     const decoratedSummary = latencyMs === null ? "not probed" : `${latencyMs} ms`;
+    const lines = [`${bold(preset.name)} via ${url}  ${dim(decoratedSummary)}`];
+    let bypassPlain = "";
+    if (bypass.length > 0) {
+      lines.push(dim(`bypassing ${bypass.join(", ")}`));
+      bypassPlain = bypassNotice(bypass);
+    }
     reporter.notice({
-      plain: `prx: ${endpoint.type} endpoint ${url} ${plainSummary}, launching ${preset.name}\n`,
-      decorated: renderBlock({
-        mark: symbol("step"),
-        lines: [`${bold(preset.name)} via ${url}  ${dim(decoratedSummary)}`],
-      }),
+      plain:
+        `prx: ${endpoint.type} endpoint ${url} ${plainSummary}, launching ${preset.name}\n` +
+        bypassPlain,
+      decorated: renderBlock({ mark: symbol("step"), lines }),
     });
   }
 
-  const injected = inject(preset, endpoint);
+  const injected = inject(preset, endpoint, bypass);
   const landing = preset.landingUrl === undefined ? [] : [preset.landingUrl];
   const args = [...injected.args, ...passthrough, ...landing];
   if (preset.launch === "detached") {
@@ -140,11 +152,17 @@ interface Injected {
   args: string[];
 }
 
-function inject(preset: Preset, endpoint: Endpoint): Injected {
+function inject(preset: Preset, endpoint: Endpoint, bypass: string[]): Injected {
   if (preset.injection === "env") {
-    return { env: envInjection(endpoint), args: [] };
+    return { env: envInjection(endpoint, bypass), args: [] };
   }
-  return { env: {}, args: argsInjection(endpoint) };
+  return { env: {}, args: argsInjection(endpoint, bypass) };
+}
+
+// Only what the config names: the local hosts are bypassed by every launch, chosen by nobody
+function bypassNotice(bypass: string[]): string {
+  const subject = bypass.length === 1 ? "1 host bypasses" : `${bypass.length} hosts bypass`;
+  return `prx: ${subject} the proxy: ${bypass.join(", ")}\n`;
 }
 
 // A first run is never a dead end: without a config the wizard runs first, unless a wrapper

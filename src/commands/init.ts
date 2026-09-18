@@ -7,8 +7,10 @@ import {
   configPath,
   ENDPOINT_TYPES,
   isValidPort,
+  parseBypassList,
   parseEndpointAddress,
   PORT_RANGE_MESSAGE,
+  readConfig,
   writeConfig,
   type Address,
   type BuiltInProxyConfig,
@@ -50,6 +52,8 @@ const PUBLIC_KEY_SUFFIX = ".pub";
 const SSH_CONFIG_HINT = "named in ~/.ssh/config";
 const USE_AGENT = "ssh-agent";
 const ANOTHER_FILE = "another-file";
+const BYPASS_QUESTION =
+  "Hosts that bypass the proxy, comma-separated (e.g. api.example.com, .sourcecraft.tech, .ru)";
 const DEFAULT_SOCKS_PORT = "1080";
 const DEFAULT_HTTP_PORT = "8118";
 
@@ -74,12 +78,13 @@ export async function initWizard(command: InitCommand): Promise<Config> {
 
   const proxy =
     source === "external" ? await askExternalProxy(command) : await askBuiltInProxy(command);
-  const config: Config = { version: 1, proxy };
+  const bypass = await askBypass(command, await existingBypass(system));
+  const config: Config = { version: 1, proxy: bypass.length > 0 ? { ...proxy, bypass } : proxy };
   await writeConfig(system, config);
   const path = configPath(system);
   reporter.step(`Saved config to ${path}\n`, (output) => {
     const title = `Saved to ${pathLink(system.homeDir(), path)}`;
-    clack.note(table(summaryRows(system, proxy)).join("\n"), title, { output });
+    clack.note(table(summaryRows(system, config.proxy)).join("\n"), title, { output });
   });
 
   // The config is already saved at this point, so backing out here only declines the start
@@ -110,6 +115,17 @@ function summaryLabel(text: string): Cell {
 }
 
 function summaryRows(
+  system: SystemAdapter,
+  proxy: BuiltInProxyConfig | ExternalProxyConfig,
+): Cell[][] {
+  const rows = sourceRows(system, proxy);
+  if (proxy.bypass !== undefined) {
+    rows.push([summaryLabel("Bypass"), { text: proxy.bypass.join(", ") }]);
+  }
+  return rows;
+}
+
+function sourceRows(
   system: SystemAdapter,
   proxy: BuiltInProxyConfig | ExternalProxyConfig,
 ): Cell[][] {
@@ -150,6 +166,31 @@ function nextStep(listing: PresetListing[]): string {
     return `Install Claude Code or Chrome, then ${cyan("prx run <preset>")}`;
   }
   return `Next: ${cyan(`prx run ${installed.name}`)}`;
+}
+
+async function askBypass(command: InitCommand, initial: string[]): Promise<string[]> {
+  const input = await askText(command.system, BYPASS_QUESTION, initial.join(", "), (candidate) => {
+    const parsed = parseBypassList(candidate);
+    return parsed.ok ? undefined : parsed.message;
+  });
+  const parsed = parseBypassList(input);
+  if (!parsed.ok) {
+    throw new Error(`validated bypass list failed to parse: ${parsed.message}`);
+  }
+  return parsed.entries;
+}
+
+// The wizard rewrites the whole config, so a re-run offers back what the current one bypasses
+// rather than dropping it; a config too broken to read simply has nothing to offer
+async function existingBypass(system: SystemAdapter): Promise<string[]> {
+  try {
+    return (await readConfig(system)).proxy.bypass ?? [];
+  } catch (error) {
+    if (error instanceof PrxError) {
+      return [];
+    }
+    throw error;
+  }
 }
 
 // The dependency check comes first so a missing binary is reported before any typing

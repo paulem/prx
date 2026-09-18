@@ -71,6 +71,89 @@ async function problemFor(proxy: unknown): Promise<string> {
   return fake.stderr().replace(`Config at ${FAKE_CONFIG_PATH} is invalid: `, "");
 }
 
+const HTTP_ENDPOINT = { http: { host: "127.0.0.1", port: 8118 } };
+
+function withBypass(bypass: unknown): unknown {
+  return { source: "external", endpoints: HTTP_ENDPOINT, bypass };
+}
+
+describe("proxy.bypass validation", () => {
+  test("accepts hosts, both suffix spellings and a whole zone", async () => {
+    const fake = createFakeSystem();
+    const proxy = withBypass([
+      "api.sourcecraft.tech",
+      ".sourcecraft.tech",
+      "*.sourcecraft.tech",
+      ".ru",
+    ]);
+    fake.files.set(FAKE_CONFIG_PATH, JSON.stringify({ version: 1, proxy }));
+
+    const exitCode = await runCli(["config"], fake.system);
+
+    expect(exitCode).toBe(0);
+    expect(fake.stderr()).toBe("");
+  });
+
+  test("a dotless label is turned down with the zone spelling", async () => {
+    expect(await problemFor(withBypass(["ru"]))).toBe(
+      'proxy.bypass entry "ru" is invalid. Write .ru to bypass a whole zone\n',
+    );
+  });
+
+  test("a port is turned down", async () => {
+    expect(await problemFor(withBypass(["api.example.com:443"]))).toBe(
+      'proxy.bypass entry "api.example.com:443" is invalid. ' +
+        "Ports and address ranges are not supported\n",
+    );
+  });
+
+  test("an address range is turned down", async () => {
+    expect(await problemFor(withBypass(["192.168.0.0/16"]))).toBe(
+      'proxy.bypass entry "192.168.0.0/16" is invalid. ' +
+        "Ports and address ranges are not supported\n",
+    );
+  });
+
+  test("a URL is turned down", async () => {
+    expect(await problemFor(withBypass(["http://example.com"]))).toBe(
+      'proxy.bypass entry "http://example.com" is invalid. Write a host, not a URL\n',
+    );
+  });
+
+  test("a wildcard anywhere but the front is turned down", async () => {
+    expect(await problemFor(withBypass(["ex*mple.com"]))).toBe(
+      'proxy.bypass entry "ex*mple.com" is invalid. The only wildcard is a leading *.\n',
+    );
+  });
+
+  test("an empty entry is turned down", async () => {
+    expect(await problemFor(withBypass([""]))).toBe(
+      'proxy.bypass entry "" is invalid. A bypass entry cannot be empty\n',
+    );
+  });
+
+  test("a bypass that is not an array of strings is turned down", async () => {
+    expect(await problemFor(withBypass("api.example.com"))).toBe(
+      "proxy.bypass must be an array of strings\n",
+    );
+  });
+
+  // Everything the URL parser would quietly strip widens the bypass past what was written
+  test("anything the URL parser would strip is turned down, not narrowed to the host", async () => {
+    for (const entry of [
+      "user@example.com",
+      "example.com?x",
+      "example.com#f",
+      "example.com\\evil",
+    ]) {
+      expect(await problemFor(withBypass([entry]))).toBe(
+        `proxy.bypass entry ${JSON.stringify(entry)} is invalid. ` +
+          "Write a hostname such as api.example.com\n",
+      );
+    }
+  });
+});
+
 describe("prx config validation", () => {
   test("reads an external proxy with both endpoints", async () => {
     const fake = createFakeSystem();

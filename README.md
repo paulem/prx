@@ -46,6 +46,12 @@ prx: http endpoint http://127.0.0.1:8118 is live (42 ms), launching claude
 prx: socks endpoint socks5://127.0.0.1:1080 is live (31 ms), launching chrome
 ```
 
+When the config names a bypass, a second line says which hosts leave the app unproxied. It lists only what you configured; the local machine is bypassed by every launch and appears nowhere:
+
+```
+prx: 2 hosts bypass the proxy: .sourcecraft.tech, .ru
+```
+
 A built-in proxy that is not running, after a reboot for instance, is started first, exactly as `prx up` starts it and with the same `dependency_missing` and `port_in_use` refusals. A built-in proxy that is running but stalled, one whose endpoint fails the probe, is restarted the same way; that is what happens after a VPN is switched on or off under a live tunnel. Either way `run` then waits up to the start timeout for the chosen endpoint alone to come live and says so on stderr before the launch line:
 
 ```
@@ -70,6 +76,8 @@ Sets up the proxy interactively. The first question is the proxy source, externa
 For an external proxy the wizard asks, for each endpoint type, whether to record one and its address: `host:port` or `http://host:port` for the HTTP endpoint, defaulting to `127.0.0.1:8118`, and `host:port` or `socks5://host:port` for the SOCKS endpoint, defaulting to `127.0.0.1:1080`. At least one endpoint is required. It probes each endpoint right away and shows the results. If a probe fails it asks whether to save anyway, so prx can be set up before the proxy is running.
 
 For a built-in proxy the wizard first checks that `autossh` and `privoxy` are installed and stops with the install command when one is missing, so you never fill in the whole wizard only to be refused. Then it asks for the ssh user, host and port, defaulting to 22, and the ssh key: a list of the private keys in `~/.ssh`, each with its comment, followed by the keys in ssh-agent and a path typed by hand, which is checked to exist. The key that `~/.ssh/config` names for the host is preselected, since that is the one ssh would use interactively; otherwise the first key is. Keys come before ssh-agent because a key file keeps working after a reboot, while an agent forgets its identities and the tunnel then fails with `Permission denied (publickey)`. Then the SOCKS and HTTP ports, defaulting to 1080 and 8118; a port something already listens on is reported and asked again, so `prx up` cannot fail later for a reason you could have fixed at setup. After saving, it offers to start the proxy right away, defaulting to yes, and shows the same report as `prx up`.
+
+Both paths then ask which hosts bypass the proxy, as one comma-separated line, empty for none. A re-run offers the current list back, so changing proxies never drops it. Entries are checked as they are typed: `.ru` is a whole zone, `ru` is turned down as the host it would otherwise match.
 
 Both paths end by listing the presets with whether each app was found on this machine. Cancelling anywhere leaves the existing config untouched. Re-run the wizard any time to change the proxy.
 
@@ -160,10 +168,10 @@ prx config --json
 # {"path":"/Users/me/.config/prx/config.json","config":{"version":1,"proxy":{...}}}
 
 prx run --json chrome
-# {"preset":"chrome","endpoint":{"type":"socks","host":"127.0.0.1","port":1080},"latencyMs":31}
+# {"preset":"chrome","endpoint":{"type":"socks","host":"127.0.0.1","port":1080},"latencyMs":31,"bypass":[".sourcecraft.tech",".ru"]}
 ```
 
-`run --json` prints the launch object before the app starts. With `--no-check`, `latencyMs` is `null`. No PID is reported.
+`run --json` prints the launch object before the app starts. With `--no-check`, `latencyMs` is `null`. `bypass` carries the configured hosts in the spelling prx injected, and is left out when the config names none. No PID is reported.
 
 Errors in JSON mode are a JSON object on stdout with a stable code and a message:
 
@@ -196,11 +204,11 @@ A preset is a built-in description of how to launch one app through the proxy: w
 
 ### claude
 
-An attached launch of Claude Code with `HTTP_PROXY`, `HTTPS_PROXY`, and their lowercase variants set to the HTTP endpoint's URL. Claude Code does not support SOCKS proxies, so the preset lists only `http`. `NO_PROXY` and `no_proxy` carry the bypass `localhost,127.0.0.1,::1`, so Claude Code can still reach local servers such as MCP servers without going through the proxy. Before the launch, the probe goes to `https://api.anthropic.com/`, the host Claude Code actually needs. prx exits with Claude Code's exit code.
+An attached launch of Claude Code with `HTTP_PROXY`, `HTTPS_PROXY`, and their lowercase variants set to the HTTP endpoint's URL. Claude Code does not support SOCKS proxies, so the preset lists only `http`. `NO_PROXY` and `no_proxy` carry `localhost,127.0.0.1,::1` followed by everything `proxy.bypass` names, so Claude Code still reaches local servers such as MCP servers, and remote ones the proxy cannot serve, without going through the proxy. Before the launch, the probe goes to `https://api.anthropic.com/`, the host Claude Code actually needs. prx exits with Claude Code's exit code.
 
 ### chrome
 
-Launches a new Chrome instance through the macOS `open` command with `--proxy-server=<endpoint URL>` as an argument, followed by any passthrough arguments and then `https://api.ipify.org` as a landing page. The URL is `socks5://host:port` for a SOCKS endpoint, which Chrome prefers when the proxy has one, and `http://host:port` otherwise; with `socks5://` Chrome resolves DNS on the proxy side. The landing page opens as a tab showing the address the proxy exits from, so a glance tells this window apart from an unproxied Chrome; Chrome itself gives no visible sign that a proxy flag is in effect. Chrome keeps your normal profile. The launch is detached, so prx returns immediately and does not capture Chrome's output.
+Launches a new Chrome instance through the macOS `open` command with `--proxy-server=<endpoint URL>` and `--proxy-bypass-list=<bypass>` as arguments, followed by any passthrough arguments and then `https://api.ipify.org` as a landing page. The bypass list is the same one Claude Code gets, spelled the way Chrome reads it; Chrome bypasses loopback on its own, so the local entries in it change nothing. The URL is `socks5://host:port` for a SOCKS endpoint, which Chrome prefers when the proxy has one, and `http://host:port` otherwise; with `socks5://` Chrome resolves DNS on the proxy side. The landing page opens as a tab showing the address the proxy exits from, so a glance tells this window apart from an unproxied Chrome; Chrome itself gives no visible sign that a proxy flag is in effect. Chrome keeps your normal profile. The launch is detached, so prx returns immediately and does not capture Chrome's output.
 
 **Chrome must not already be running.** Chrome ignores proxy flags when an instance already exists: the flag would be silently dropped and you would get an unproxied window that looks proxied. prx checks for a running instance before launching and refuses with exit code 3 and an explanation. Quit Chrome and run again.
 
@@ -252,7 +260,8 @@ The config lives at `~/.config/prx/config.json`, or under `$XDG_CONFIG_HOME/prx/
     "endpoints": {
       "http": { "host": "127.0.0.1", "port": 8118 },
       "socks": { "host": "127.0.0.1", "port": 1080 }
-    }
+    },
+    "bypass": [".sourcecraft.tech", ".ru"]
   }
 }
 ```
@@ -277,6 +286,10 @@ The config lives at `~/.config/prx/config.json`, or under `$XDG_CONFIG_HOME/prx/
 ```
 
 `identityFile` is optional; without it ssh uses the keys in ssh-agent. A config in the earlier single-address shape is reported as invalid with a pointer to `prx init`. Probe URLs and the timeouts are not stored, they are code-level defaults.
+
+`bypass` is optional and belongs to whichever source the proxy has. It names hosts that go direct instead of through this proxy, which is what a service the proxy's exit cannot reach, or one that must see your own address, needs. It sits under `proxy` because it describes where that proxy exits: change proxies and the list is worth revisiting. An entry is either an exact host, `api.example.com`, or a suffix, `.example.com`, `*.example.com` or a whole zone such as `.ru`; an international zone is stored as punycode, so `.рф` is saved as `.xn--p1ai`. Nothing else is accepted, because prx hands the list to each app rather than matching it itself and only these forms mean the same thing to both `NO_PROXY` and Chrome: ports, address ranges, inner wildcards and a dotless label such as `ru` are refused with `config_invalid` and exit 2. `localhost`, `127.0.0.1` and `::1` are bypassed by every launch and cannot be removed.
+
+A bypass is the one hole in prx's proxying, so a wrong entry sends traffic you meant to hide out through your own address without saying so. See [ADR-0005](docs/adr/0005-configured-bypass-sends-chosen-hosts-direct.md).
 
 ## Exit codes
 

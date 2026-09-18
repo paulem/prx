@@ -15,6 +15,9 @@ beforeAll(() => {
   trustProbeTarget();
 });
 
+const BYPASS_QUESTION =
+  "Hosts that bypass the proxy, comma-separated (e.g. api.example.com, .sourcecraft.tech, .ru)";
+
 const pool = proxyPool();
 afterEach(() => pool.closeAll());
 
@@ -32,7 +35,7 @@ describe("prx init with an external proxy", () => {
     const http = await pool.open("live");
     const fake = createFakeSystem();
     fake.onPath.set("claude", "/home/test/.local/bin/claude");
-    fake.answers.push("external", true, `127.0.0.1:${http.port}`, false);
+    fake.answers.push("external", true, `127.0.0.1:${http.port}`, false, USE_DEFAULT);
 
     const exitCode = await runCli(["init"], fake.system);
 
@@ -43,6 +46,7 @@ describe("prx init with an external proxy", () => {
       "Record an HTTP endpoint?",
       "HTTP endpoint (host:port or http://host:port)",
       "Record a SOCKS endpoint?",
+      BYPASS_QUESTION,
     ]);
     expect(fake.stdout()).toMatch(
       new RegExp(
@@ -71,7 +75,14 @@ describe("prx init with an external proxy", () => {
     const http = await pool.open("live");
     const socks = await pool.open("socks");
     const fake = createFakeSystem();
-    fake.answers.push("external", true, `127.0.0.1:${http.port}`, true, `127.0.0.1:${socks.port}`);
+    fake.answers.push(
+      "external",
+      true,
+      `127.0.0.1:${http.port}`,
+      true,
+      `127.0.0.1:${socks.port}`,
+      USE_DEFAULT,
+    );
 
     const exitCode = await runCli(["init"], fake.system);
 
@@ -93,7 +104,7 @@ describe("prx init with an external proxy", () => {
   test("records only a SOCKS endpoint", async () => {
     const socks = await pool.open("socks");
     const fake = createFakeSystem();
-    fake.answers.push("external", false, true, `socks5://127.0.0.1:${socks.port}`);
+    fake.answers.push("external", false, true, `socks5://127.0.0.1:${socks.port}`, USE_DEFAULT);
 
     const exitCode = await runCli(["init"], fake.system);
 
@@ -104,7 +115,7 @@ describe("prx init with an external proxy", () => {
   test("refuses to save no endpoint and asks again", async () => {
     const http = await pool.open("live");
     const fake = createFakeSystem();
-    fake.answers.push("external", false, false, true, `127.0.0.1:${http.port}`, false);
+    fake.answers.push("external", false, false, true, `127.0.0.1:${http.port}`, false, USE_DEFAULT);
 
     const exitCode = await runCli(["init"], fake.system);
 
@@ -117,6 +128,7 @@ describe("prx init with an external proxy", () => {
       "Record an HTTP endpoint?",
       "HTTP endpoint (host:port or http://host:port)",
       "Record a SOCKS endpoint?",
+      BYPASS_QUESTION,
     ]);
     expect(savedConfig(fake)).toEqual({ version: 1, proxy: externalProxy({ http }) });
   });
@@ -124,7 +136,7 @@ describe("prx init with an external proxy", () => {
   test("accepts the http://host:port form", async () => {
     const http = await pool.open("live");
     const fake = createFakeSystem();
-    fake.answers.push("external", true, `http://localhost:${http.port}`, false);
+    fake.answers.push("external", true, `http://localhost:${http.port}`, false, USE_DEFAULT);
 
     await runCli(["init"], fake.system);
 
@@ -136,7 +148,7 @@ describe("prx init with an external proxy", () => {
 
   test("defaults the HTTP address to 127.0.0.1:8118", async () => {
     const fake = createFakeSystem();
-    fake.answers.push("external", true, USE_DEFAULT, false, true);
+    fake.answers.push("external", true, USE_DEFAULT, false, true, USE_DEFAULT);
 
     await runCli(["init"], fake.system, { probeTimeoutMs: 300 });
 
@@ -158,6 +170,7 @@ describe("prx init with an external proxy", () => {
       `socks5://127.0.0.1:${http.port}`,
       `127.0.0.1:${http.port}`,
       false,
+      USE_DEFAULT,
     );
 
     const exitCode = await runCli(["init"], fake.system);
@@ -182,6 +195,7 @@ describe("prx init with an external proxy", () => {
       true,
       `127.0.0.1:${socks.port}`,
       true,
+      USE_DEFAULT,
     );
 
     const exitCode = await runCli(["init"], fake.system);
@@ -225,7 +239,7 @@ describe("prx init with an external proxy", () => {
     const http = await pool.open("live");
     const fake = createFakeSystem();
     writeFakeConfig(fake, externalProxy({ http: { host: "10.0.0.1", port: 3128 } }));
-    fake.answers.push("external", true, `127.0.0.1:${http.port}`, false);
+    fake.answers.push("external", true, `127.0.0.1:${http.port}`, false, USE_DEFAULT);
 
     await runCli(["init"], fake.system);
 
@@ -238,7 +252,7 @@ describe("prx run on a first run", () => {
     const http = await pool.open("live");
     const fake = createFakeSystem();
     fake.onPath.set("claude", "/home/test/.local/bin/claude");
-    fake.answers.push("external", true, `127.0.0.1:${http.port}`, false);
+    fake.answers.push("external", true, `127.0.0.1:${http.port}`, false, USE_DEFAULT);
 
     const exitCode = await runCli(["run", "claude", "--resume"], fake.system);
 
@@ -325,6 +339,7 @@ describe("prx init with a built-in proxy", () => {
       USE_DEFAULT,
       USE_DEFAULT,
       USE_DEFAULT,
+      USE_DEFAULT,
       false,
     );
 
@@ -346,6 +361,11 @@ describe("prx init with a built-in proxy", () => {
       },
       { kind: "text", message: "SOCKS port", initialValue: "1080" },
       { kind: "text", message: "HTTP port", initialValue: "8118" },
+      {
+        kind: "text",
+        message: BYPASS_QUESTION,
+        initialValue: "",
+      },
       { kind: "confirm", message: "Start the built-in proxy now?", initialValue: true },
     ]);
     expect(savedConfig(fake)).toEqual({
@@ -379,6 +399,7 @@ describe("prx init with a built-in proxy", () => {
       "box.example",
       USE_DEFAULT,
       "/home/test/.ssh/id_rsa",
+      USE_DEFAULT,
       USE_DEFAULT,
       USE_DEFAULT,
       false,
@@ -420,6 +441,7 @@ describe("prx init with a built-in proxy", () => {
       USE_DEFAULT,
       USE_DEFAULT,
       USE_DEFAULT,
+      USE_DEFAULT,
       false,
     );
 
@@ -457,6 +479,7 @@ describe("prx init with a built-in proxy", () => {
       USE_DEFAULT,
       USE_DEFAULT,
       USE_DEFAULT,
+      USE_DEFAULT,
       false,
     );
 
@@ -484,6 +507,7 @@ describe("prx init with a built-in proxy", () => {
       USE_DEFAULT,
       USE_DEFAULT,
       USE_DEFAULT,
+      USE_DEFAULT,
       false,
     );
 
@@ -507,6 +531,7 @@ describe("prx init with a built-in proxy", () => {
       "~/keys/box",
       "1081",
       "8119",
+      USE_DEFAULT,
       false,
     );
 
@@ -542,6 +567,7 @@ describe("prx init with a built-in proxy", () => {
       "~/keys/box",
       USE_DEFAULT,
       USE_DEFAULT,
+      USE_DEFAULT,
       false,
     );
 
@@ -571,6 +597,7 @@ describe("prx init with a built-in proxy", () => {
       USE_DEFAULT,
       "1080",
       "8118",
+      USE_DEFAULT,
       false,
     );
 
@@ -601,6 +628,7 @@ describe("prx init with a built-in proxy", () => {
       "1081",
       USE_DEFAULT,
       "8119",
+      USE_DEFAULT,
       false,
     );
 
@@ -630,6 +658,7 @@ describe("prx init with a built-in proxy", () => {
       USE_DEFAULT,
       String(socks.port),
       String(http.port),
+      USE_DEFAULT,
       true,
     );
 
@@ -658,6 +687,7 @@ describe("prx init with a built-in proxy", () => {
       "built-in",
       "me",
       "box.example",
+      USE_DEFAULT,
       USE_DEFAULT,
       USE_DEFAULT,
       USE_DEFAULT,
@@ -698,6 +728,7 @@ describe("prx init with a built-in proxy", () => {
       USE_DEFAULT,
       String(socks.port),
       String(http.port),
+      USE_DEFAULT,
       true,
     );
 
@@ -707,5 +738,61 @@ describe("prx init with a built-in proxy", () => {
     expect(fake.backgroundStarts).toHaveLength(2);
     expect(fake.spawns).toHaveLength(1);
     expect(fake.stderr()).toMatch(/^prx: http endpoint .* is live .*, launching claude\n$/);
+  });
+});
+
+describe("prx init and the bypass list", () => {
+  test("saves the hosts typed into the bypass question", async () => {
+    const http = await pool.open("live");
+    const fake = createFakeSystem();
+    fake.answers.push("external", true, `127.0.0.1:${http.port}`, false, ".sourcecraft.tech, .ru");
+
+    const exitCode = await runCli(["init"], fake.system);
+
+    expect(exitCode).toBe(0);
+    expect(savedConfig(fake)).toEqual({
+      version: 1,
+      proxy: { ...externalProxy({ http }), bypass: [".sourcecraft.tech", ".ru"] },
+    });
+    expect(questionMessages(fake).at(-1)).toBe(BYPASS_QUESTION);
+  });
+
+  test("an empty answer leaves the key out of the config", async () => {
+    const http = await pool.open("live");
+    const fake = createFakeSystem();
+    fake.answers.push("external", true, `127.0.0.1:${http.port}`, false, "");
+
+    await runCli(["init"], fake.system);
+
+    expect(savedConfig(fake)).toEqual({ version: 1, proxy: externalProxy({ http }) });
+  });
+
+  test("re-running init offers the existing hosts back", async () => {
+    const http = await pool.open("live");
+    const fake = createFakeSystem();
+    writeFakeConfig(fake, { ...externalProxy({ http }), bypass: [".ru"] });
+    fake.answers.push("external", true, `127.0.0.1:${http.port}`, false, USE_DEFAULT);
+
+    await runCli(["init"], fake.system);
+
+    expect(fake.questions.at(-1)).toEqual({
+      kind: "text",
+      message: BYPASS_QUESTION,
+      initialValue: ".ru",
+    });
+    expect(savedConfig(fake)).toMatchObject({ proxy: { bypass: [".ru"] } });
+  });
+
+  test("an entry the matchers cannot honour is turned down with the reason", async () => {
+    const http = await pool.open("live");
+    const fake = createFakeSystem();
+    fake.answers.push("external", true, `127.0.0.1:${http.port}`, false, "ru", ".ru");
+
+    await runCli(["init"], fake.system);
+
+    expect(fake.rejectedInputs).toEqual([
+      { input: "ru", message: "Write .ru to bypass a whole zone" },
+    ]);
+    expect(savedConfig(fake)).toMatchObject({ proxy: { bypass: [".ru"] } });
   });
 });
