@@ -61,7 +61,7 @@ An identity whose key file needs a passphrase while ssh-agent does not hold it. 
 _Avoid_: encrypted key, unavailable key
 
 **Tunnel failure**:
-The last line ssh wrote to the autossh log, reported when the proxy is running but an endpoint is not live.
+The line from the autossh log that explains why the tunnel is down, reported when the proxy is running but an endpoint is not live. The newest line prx recognises, or the newest line of all when it recognises none.
 _Avoid_: ssh error, log tail, diagnosis
 
 **Injection**:

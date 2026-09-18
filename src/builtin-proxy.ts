@@ -81,21 +81,30 @@ export interface TunnelFailure {
 
 /**
  * Explains a running proxy whose endpoint is not live. The log holds only the current run, so
- * its last line is what ssh most recently complained about
+ * every line in it is from the tunnel as it stands. autossh retries within seconds and a server
+ * under that hammering answers with a reset or a closed connection, which says nothing about
+ * why the tunnel never came up, so the newest line prx can act on wins over the newest line
  */
 export async function readTunnelFailure(
   system: SystemAdapter,
   proxy: BuiltInProxyConfig,
 ): Promise<TunnelFailure | undefined> {
   const log = await system.readTextFile(builtInProxyPaths(system).autossh.log);
-  const message = log
+  const lines = log
     ?.split("\n")
     .map((line) => line.trim())
-    .findLast((line) => line !== "");
-  if (message === undefined) {
+    .filter((line) => line !== "");
+  const latest = lines?.at(-1);
+  if (lines === undefined || latest === undefined) {
     return undefined;
   }
-  return { message, hint: await tunnelHint(system, proxy, message) };
+  for (const message of lines.toReversed()) {
+    const hint = await tunnelHint(system, proxy, message);
+    if (hint !== undefined) {
+      return { message, hint };
+    }
+  }
+  return { message: latest, hint: undefined };
 }
 
 const UNREACHABLE_HOST_PATTERN =

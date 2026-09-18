@@ -218,6 +218,27 @@ describe("prx status on a built-in proxy", () => {
     );
   });
 
+  test("a retry's reset does not bury the line that explains the tunnel", async () => {
+    const http = await pool.closed();
+    const socks = await pool.closed();
+    const fake = createFakeSystem();
+    writeFakeConfig(fake, builtInProxy({ socksPort: socks.port, httpPort: http.port }));
+    markRunning(fake);
+    fake.files.set(
+      `${FAKE_STATE_DIR}/autossh.log`,
+      "me@box.example: Permission denied (publickey).\n" +
+        "kex_exchange_identification: read: Connection reset by peer\n" +
+        "Connection closed by box.example port 22\n",
+    );
+
+    await statusOf(fake);
+
+    expect(fake.stdout()).toContain("Tunnel: me@box.example: Permission denied (publickey).\n");
+    expect(fake.stdout()).toContain(
+      "Run prx init to pick a key file, or add one to ssh-agent with: ssh-add <path>\n",
+    );
+  });
+
   test("a locked key is named as the reason the tunnel was denied, with the way to unlock it", async () => {
     const http = await pool.closed();
     const socks = await pool.closed();
